@@ -120,7 +120,7 @@ func (s *Session) playANSI(segs []segment) bool {
 			}
 			continue
 		}
-		if s.Local {
+		if s.Local && localAudio {
 			if s.Music != "strip" && !s.playLocal(sg.body) {
 				return false
 			}

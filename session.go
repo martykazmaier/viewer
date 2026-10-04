@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -44,18 +43,19 @@ type Session struct {
 	Idle     time.Duration
 	Deadline time.Time
 
-	sock     syscall.Handle
-	hOut     syscall.Handle
-	out      []byte
-	lastAttr int
-	raw      chan byte
-	keys     chan int
-	pending  []byte
-	lastCR   bool
-	hungup   bool
-	escGuard time.Time
-	cprRow   int
-	cprCol   int
+	sock      sockHandle
+	conOut    func([]byte)
+	sizeKnown bool
+	out       []byte
+	lastAttr  int
+	raw       chan byte
+	keys      chan int
+	pending   []byte
+	lastCR    bool
+	hungup    bool
+	escGuard  time.Time
+	cprRow    int
+	cprCol    int
 
 	paceStart time.Time
 	paceSent  int64
@@ -89,133 +89,10 @@ func newSession(cfg config) (*Session, error) {
 	s.player = newMusicPlayer()
 	if cfg.width > 0 {
 		s.W, s.H = cfg.width, cfg.height
-	} else if !s.Local {
+	} else if !s.sizeKnown {
 		s.detectSize()
 	}
 	return s, nil
-}
-
-func (s *Session) initSocket(h int64) error {
-	var d syscall.WSAData
-	if err := syscall.WSAStartup(0x0202, &d); err != nil {
-		return fmt.Errorf("WSAStartup failed: %v", err)
-	}
-	s.sock = syscall.Handle(h)
-	if !sockConnected(s.sock) {
-		dup, _, tried, ok := adoptSocket(s.sock)
-		if !ok {
-			var names []string
-			for _, p := range tried {
-				names = append(names, fmt.Sprintf("%s (pid %d)", p.name, p.pid))
-			}
-			state := "does not exist in this process"
-			if handleExists(s.sock) {
-				state = "is open in this process but is not a connected socket"
-			}
-			return fmt.Errorf("socket handle %d %s, and it could not be copied from a parent process "+
-				"[tried: %s]. The launching door must start viewer.exe with handle inheritance, "+
-				"or pass the right handle with -H", h, state, strings.Join(names, ", "))
-		}
-		s.sock = dup
-	}
-	s.raw = make(chan byte, 8192)
-	go s.readLoop()
-	return nil
-}
-
-func (s *Session) initConsole() error {
-	hIn, err := syscall.GetStdHandle(syscall.STD_INPUT_HANDLE)
-	if err != nil {
-		return err
-	}
-	hOut, err := syscall.GetStdHandle(syscall.STD_OUTPUT_HANDLE)
-	if err != nil {
-		return err
-	}
-	var inMode, outMode uint32
-	if err := syscall.GetConsoleMode(hIn, &inMode); err != nil {
-		return fmt.Errorf("local mode needs a console: %v", err)
-	}
-	syscall.GetConsoleMode(hOut, &outMode)
-	oldCP := getConsoleOutputCP()
-
-	const enableExtendedFlags = 0x0080
-	const enableProcessedOutput = 0x0001
-	const enableVTProcessing = 0x0004
-	setConsoleMode(hIn, enableExtendedFlags)
-	setConsoleMode(hOut, outMode|enableProcessedOutput|enableVTProcessing)
-	setConsoleOutputCP(437)
-	s.restore = func() {
-		setConsoleMode(hIn, inMode)
-		setConsoleMode(hOut, outMode)
-		setConsoleOutputCP(oldCP)
-	}
-	s.hOut = hOut
-	if w, h, ok := consoleSize(hOut); ok && w >= 40 && h >= 10 {
-		s.W, s.H = w, h
-	}
-	s.keys = make(chan int, 256)
-	go s.consoleLoop(hIn)
-	return nil
-}
-
-func (s *Session) consoleLoop(h syscall.Handle) {
-	recs := make([]inputRecord, 16)
-	for {
-		n, ok := readConsoleInput(h, recs)
-		if !ok {
-			close(s.keys)
-			return
-		}
-		for _, r := range recs[:n] {
-			if r.EventType != 1 || r.KeyDown == 0 {
-				continue
-			}
-			k := mapVirtualKey(r)
-			if k == kNone {
-				continue
-			}
-			for i := 0; i < int(max(r.Repeat, 1)); i++ {
-				s.keys <- k
-			}
-		}
-	}
-}
-
-func mapVirtualKey(r inputRecord) int {
-	switch r.VK {
-	case 0x26:
-		return kUp
-	case 0x28:
-		return kDown
-	case 0x25:
-		return kLeft
-	case 0x27:
-		return kRight
-	case 0x21:
-		return kPgUp
-	case 0x22:
-		return kPgDn
-	case 0x24:
-		return kHome
-	case 0x23:
-		return kEnd
-	case 0x2D:
-		return kIns
-	case 0x2E:
-		return kDel
-	}
-	c := rune(r.Char)
-	switch {
-	case c == 0:
-		return kNone
-	case c < 0x80:
-		return int(c)
-	}
-	if b, ok := runeToCP437[c]; ok {
-		return int(b)
-	}
-	return kNone
 }
 
 const (
@@ -226,11 +103,12 @@ const (
 	tnSubIAC
 )
 
-func (s *Session) readLoop() {
+// readLoop feeds s.raw from read, stripping telnet commands when telnet is set.
+func (s *Session) readLoop(read func([]byte) (int, error), telnet bool) {
 	buf := make([]byte, 2048)
 	state := tnData
 	for {
-		n, err := sockRecv(s.sock, buf)
+		n, err := read(buf)
 		if err == errWouldBlock {
 			time.Sleep(10 * time.Millisecond)
 			continue
@@ -240,6 +118,10 @@ func (s *Session) readLoop() {
 			return
 		}
 		for _, b := range buf[:n] {
+			if !telnet {
+				s.raw <- b
+				continue
+			}
 			switch state {
 			case tnData:
 				if b == 255 {
@@ -385,7 +267,7 @@ func (s *Session) readByte(timeout time.Duration) (byte, bool) {
 }
 
 func (s *Session) keyAvailable() bool {
-	if s.Local {
+	if s.keys != nil {
 		return len(s.keys) > 0
 	}
 	return len(s.pending) > 0 || len(s.raw) > 0
@@ -394,7 +276,7 @@ func (s *Session) keyAvailable() bool {
 // getKey returns the next key, kTimeout if none arrived in time, or kNone/kCPR for
 // input that is not a keypress.
 func (s *Session) getKey(timeout time.Duration) int {
-	if s.Local {
+	if s.keys != nil {
 		var t <-chan time.Time
 		if timeout > 0 {
 			tm := time.NewTimer(timeout)
@@ -573,14 +455,8 @@ func (s *Session) rawSend(p []byte) {
 	if len(p) == 0 {
 		return
 	}
-	if s.Local {
-		for len(p) > 0 {
-			var n uint32
-			if err := syscall.WriteFile(s.hOut, p, &n, nil); err != nil || n == 0 {
-				return
-			}
-			p = p[n:]
-		}
+	if s.conOut != nil {
+		s.conOut(p)
 		return
 	}
 	if bytes.IndexByte(p, 0xFF) >= 0 {
