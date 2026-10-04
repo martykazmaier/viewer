@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Martin Kazmaier.
+// This software may be distributed under the terms of the Q Public License
+// version 1.0; see the LICENSE file.
+
 // Command viewer is a Win32 socket (DOOR32) BBS door for EleBBS, Mystic and other
 // DOOR32.SYS-capable BBS packages. It displays text and ANSI files (with optional
 // baud rate emulation and ANSI music) and browses archives with long file names.

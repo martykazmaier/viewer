@@ -191,3 +191,10 @@ installed, the test archives are also checked against 7-Zip.
 | `arcview.go` | Archive light bar and details screen |
 | `archive.go`, `arc_zip.go`, `arc_rar.go`, `arc_dos.go` | Archive readers |
 | `cp437.go`, `textutil.go` | Character set and text helpers |
+
+## License
+
+Copyright (C) 2026 Martin Kazmaier.
+
+This software may be distributed under the terms of the
+[Q Public License version 1.0](LICENSE).
