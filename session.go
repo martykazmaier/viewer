@@ -25,6 +25,7 @@ const (
 	kIns     = 0x109
 	kDel     = 0x10A
 	kCPR     = 0x1FF
+	kDA      = 0x1FE
 )
 
 var baudRates = []int{0, 300, 1200, 2400, 9600, 14400, 19200, 28800, 38400, 57600, 115200}
@@ -42,6 +43,16 @@ type Session struct {
 	Music    string
 	Idle     time.Duration
 	Deadline time.Time
+	Graphics string // auto, sixel or ansi
+
+	gfxChecked    bool
+	sixel         bool
+	sixelReported bool
+	daParams      string
+	ctermFeat     string
+	pxW, pxH      int
+	cellW         int
+	cellH         int
 
 	sock      sockHandle
 	conOut    func([]byte)
@@ -70,6 +81,7 @@ func newSession(cfg config) (*Session, error) {
 		Local:    cfg.local,
 		Baud:     cfg.baud,
 		Music:    cfg.music,
+		Graphics: cfg.graphics,
 		Idle:     time.Duration(cfg.idle) * time.Minute,
 		lastAttr: -1,
 		W:        80,
@@ -230,6 +242,43 @@ func (s *Session) detectSize() {
 	}
 }
 
+// detectGraphics asks the terminal (once) whether it supports Sixel and how
+// large its pixel area and character cells are.
+func (s *Session) detectGraphics() {
+	if s.gfxChecked {
+		return
+	}
+	s.gfxChecked = true
+	if s.keys == nil {
+		s.Print("\x1b[14t\x1b[16t\x1b[<c\x1b[c")
+		s.flush()
+		deadline := time.Now().Add(1500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if s.getKey(time.Until(deadline)) == kDA {
+				break
+			}
+		}
+	}
+	hasParam := func(list, want string) bool {
+		for _, p := range strings.Split(strings.TrimLeft(list, "?="), ";") {
+			if p == want {
+				return true
+			}
+		}
+		return false
+	}
+	reported := (strings.HasPrefix(s.daParams, "?") && hasParam(s.daParams, "4")) || hasParam(s.ctermFeat, "4")
+	s.sixelReported = reported
+	switch s.Graphics {
+	case "sixel":
+		s.sixel = true
+	case "ansi":
+		s.sixel = false
+	default:
+		s.sixel = reported
+	}
+}
+
 // ---- input ----
 
 func (s *Session) unread(b byte) {
@@ -362,6 +411,30 @@ func (s *Session) mapSeq(intro byte, params string, final byte) int {
 		return kHome
 	case 'F', 'K':
 		return kEnd
+	case 'c':
+		if intro == '[' && params != "" {
+			switch params[0] {
+			case '?', '=':
+				s.daParams = params
+				return kDA
+			case '<':
+				s.ctermFeat = params[1:]
+			}
+		}
+		return kNone
+	case 't':
+		parts := strings.Split(params, ";")
+		if intro == '[' && len(parts) == 3 {
+			a, _ := strconv.Atoi(parts[1])
+			b, _ := strconv.Atoi(parts[2])
+			switch parts[0] {
+			case "4":
+				s.pxH, s.pxW = a, b
+			case "6":
+				s.cellH, s.cellW = a, b
+			}
+		}
+		return kNone
 	case 'R':
 		if intro == '[' {
 			parts := strings.Split(params, ";")

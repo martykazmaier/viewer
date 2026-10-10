@@ -28,6 +28,7 @@ type config struct {
 	width    int
 	height   int
 	music    string
+	graphics string
 	file     string
 }
 
@@ -43,16 +44,19 @@ Usage: viewer.exe [options] <file>
   -S<c>x<r>  Force terminal size, e.g. -S80x25 (default: auto-detect)
   -M<mode>   ANSI music: pass (default), sync = ESC[|, banana = ESC[N,
              ansi = ESC[M, strip = remove
+  -G<mode>   Graphics: auto (default, Sixel if the terminal reports it),
+             sixel = always Sixel, ansi = always ANSI half blocks
   -N<n>      Node number (accepted for compatibility, ignored)
 
 Files: text (.txt .nfo .diz ...), ANSI (.ans .asc .ice .mus .ams ...),
+images (JPEG, JPEG XL, PNG, GIF, BMP, TIFF, WebP),
 archives (ZIP, RAR 4/5, ARJ, LHA/LZH, TAR, plus .gz/.tgz/.bz2 wrappers).
 `
 
 var errUsage = errors.New("usage")
 
 func parseArgs(args []string) (config, error) {
-	cfg := config{music: "pass", idle: 5}
+	cfg := config{music: "pass", graphics: "auto", idle: 5}
 	var rest []string
 	opts := true
 	for _, a := range args {
@@ -102,6 +106,13 @@ func parseArgs(args []string) (config, error) {
 			case "pass", "sync", "banana", "ansi", "strip":
 			default:
 				err = fmt.Errorf("unknown music mode %q", v)
+			}
+		case "G":
+			cfg.graphics = strings.ToLower(v)
+			switch cfg.graphics {
+			case "auto", "sixel", "ansi":
+			default:
+				err = fmt.Errorf("unknown graphics mode %q", v)
 			}
 		case "?":
 			err = errUsage

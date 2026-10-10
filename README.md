@@ -22,6 +22,11 @@ Builds are available for Windows and Linux.
   Ctrl-N (0x0E). Music can be passed through, converted to another form for
   the caller's terminal, or removed. In Windows local mode it plays through the
   PC's sound card.
+- **Image viewer**: JPEG, JPEG XL, PNG, GIF, BMP, TIFF and WebP. Images are
+  scaled to fit the screen and shown as Sixel graphics with an adaptive
+  256-color palette when the caller's terminal supports Sixel, or as
+  16-color ANSI half blocks otherwise. Baud rate emulation applies, and a
+  keypress interrupts a slow image cleanly.
 - **Archive browser**: light-bar file list with size, compression ratio, date
   and time, plus a details screen for each file (full long name, folder,
   sizes, method, CRC-32, attributes, host OS, comments). Files inside archives
@@ -72,6 +77,7 @@ viewer [options] <file>
 | `-T<min>` | Idle timeout in minutes (default 5, 0 = none) |
 | `-S<cols>x<rows>` | Force the screen size, e.g. `-S80x25` (default: auto-detect) |
 | `-M<mode>` | ANSI music handling (see below) |
+| `-G<mode>` | Graphics: `auto` (default), `sixel` or `ansi` (see below) |
 | `-N<n>` | Node number (accepted for compatibility, ignored) |
 
 Options use the BBS style with the value attached (`-B2400`, not `-B 2400`).
@@ -89,6 +95,22 @@ If neither `-D` nor `-H` gives a socket, the viewer runs in local mode.
 | `banana` | Converted to BananaCom `ESC[N` |
 | `ansi` | Converted to `ESC[M` |
 | `strip` | Music removed, for terminals that would print it as text |
+
+### Graphics modes
+
+| Mode | Behavior |
+|---|---|
+| `auto` (default) | Sixel if the terminal reports Sixel support, otherwise ANSI half blocks |
+| `sixel` | Always Sixel, for terminals that support it but don't report it |
+| `ansi` | Always ANSI half blocks |
+
+In `auto` mode the viewer asks the terminal once per session, the first time
+an image is opened. It sends the standard Device Attributes query and SyncTERM's
+own (CTerm) query, and accepts Sixel if either reply lists feature 4. It also
+asks for the pixel size of the screen and character cells so images fill the
+screen; if the terminal doesn't answer, it assumes 8x16-pixel cells. In
+Windows local mode the replies can't be read, so use `-Gsixel` with a Sixel
+terminal such as Windows Terminal.
 
 ## BBS setup
 
@@ -144,6 +166,10 @@ Home/End; `V` or Enter to view; `Q`, Esc or Backspace to return to the list.
 **Text and hex viewer:** Up/Down, PgUp/PgDn (also Space, `+` and `-`),
 Home/End to scroll; `B` to change the baud rate; `Q` or Esc to close.
 
+**Image viewer:** `M` to switch between Sixel and ANSI blocks; `B` to change
+the baud rate; `R` to redraw; `I` for image and terminal information; Enter,
+Space, `Q` or Esc to close.
+
 **After an ANSI file:** Enter, Space, `Q` or Esc to close; `R` to replay;
 `B` to change the baud rate; `M` to change the music mode (when the file has
 music); `I` for SAUCE information (when present).
@@ -159,7 +185,7 @@ music); `I` for SAUCE information (when present).
 
 ## Building
 
-Requires Go 1.22 or later. On Windows, run:
+Requires Go 1.26 or later. On Windows, run:
 
 ```
 build.cmd
@@ -174,8 +200,12 @@ set GOARCH=arm64
 go build -trimpath -ldflags "-s -w" -o releases\viewer-linux-arm64 .
 ```
 
-`go test .` runs the archive and ANSI music tests. On Windows with 7-Zip
-installed, the test archives are also checked against 7-Zip.
+`go test .` runs the archive, ANSI music and image tests. On Windows with
+7-Zip installed, the test archives are also checked against 7-Zip. The JPEG XL
+samples in `testdata/` come from
+[jxl-go](https://github.com/kpfaulkner/jxl-go) (MIT license), which is also
+the JPEG XL decoder used by the viewer. A copy of jxl-go is kept in
+`third_party/jxl-go` with two fixes so it compiles for 32-bit targets.
 
 ## Source layout
 
@@ -188,6 +218,7 @@ installed, the test archives are also checked against 7-Zip.
 | `textview.go` | Text and hex viewer |
 | `ansiview.go` | ANSI viewer and SAUCE |
 | `music.go` | ANSI music detection, conversion and playback |
+| `imageview.go` | Image decoding, Sixel encoder and ANSI block renderer |
 | `arcview.go` | Archive light bar and details screen |
 | `archive.go`, `arc_zip.go`, `arc_rar.go`, `arc_dos.go` | Archive readers |
 | `cp437.go`, `textutil.go` | Character set and text helpers |

@@ -40,6 +40,11 @@ func viewFile(s *Session, name string, r io.ReaderAt, size int64, depth int) {
 			viewFile(s, inner, bytes.NewReader(data), int64(len(data)), depth+1)
 			return
 		}
+		if format := imageFormat(head); format != "" && size <= maxView {
+			data, _ := readAt(r, 0, int(size))
+			s.imageView(name, format, data)
+			return
+		}
 		arc, err := openArchive(head, r, size)
 		if err != nil {
 			s.message(safeText(name), err.Error())
