@@ -161,11 +161,17 @@ The viewer can be started from another door, such as a file listing door.
 ## Keys
 
 **Archive list:** Up/Down, PgUp/PgDn, Home/End to move the light bar; Enter
-(or Right) for details; `V` to view the file; `C` for the archive comment;
-`Q`, Esc or Left to exit.
+to view the file (folders and files that can't be viewed open the details
+screen instead); `D` or Right for details; `C` for the archive comment; `Q`,
+Esc or Left to exit.
 
 **Details screen:** Up/Down (or `P`/`N`) for the previous or next file;
-Home/End; `V` or Enter to view; `Q`, Esc or Backspace to return to the list.
+PgUp/PgDn to move a page of files; Home/End; Enter to view; `Q`, Esc or
+Backspace to return to the list.
+
+PgUp, PgDn, Home and End are recognized in the codes sent by SyncTERM and
+other ANSI-BBS terminals (`ESC[V`, `ESC[U`, `ESC[H`, `ESC[K`) as well as the
+VT/xterm forms (`ESC[5~`, `ESC[6~`, `ESC[1~`, `ESC[4~`, `ESC[H`, `ESC[F`).
 
 **Text and hex viewer:** Up/Down, PgUp/PgDn (also Space, `+` and `-`),
 Home/End to scroll; `B` to change the baud rate; `Q` or Esc to close.

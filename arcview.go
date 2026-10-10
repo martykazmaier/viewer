@@ -121,7 +121,7 @@ func arcView(s *Session, name string, arc *Archive, depth int) {
 		s.Color(14, 0)
 		s.Print(fitTail(" "+info, s.W-1))
 		s.ClrEol()
-		help := " Up/Dn PgUp/PgDn Home/End  Enter=Details  V=View"
+		help := " Up/Dn PgUp/PgDn Home/End  Enter=View  D=Details"
 		if arc.Comment != "" {
 			help += "  C=Comment"
 		}
@@ -140,12 +140,16 @@ func arcView(s *Session, name string, arc *Archive, depth int) {
 			sel = 0
 		case kEnd:
 			sel = len(arc.Entries) - 1
-		case kEnter, kRight:
-			sel = s.arcDetails(name, arc, sel, depth)
+		case kEnter, 'v', 'V':
+			if e := arc.Entries[sel]; e.IsDir || e.Open == nil {
+				sel = s.arcDetails(name, arc, sel, depth)
+			} else {
+				s.viewEntry(e, depth)
+			}
 			s.settle()
 			full = true
-		case 'v', 'V':
-			s.viewEntry(arc.Entries[sel], depth)
+		case 'd', 'D', kRight:
+			sel = s.arcDetails(name, arc, sel, depth)
 			s.settle()
 			full = true
 		case 'c', 'C':
@@ -228,7 +232,7 @@ func (s *Session) arcDetails(name string, arc *Archive, idx, depth int) int {
 		field("Comment", safeText(e.Comment))
 		if !e.IsDir {
 			if e.Open != nil {
-				field("Viewable", "Yes - press V or Enter")
+				field("Viewable", "Yes - press Enter")
 			} else {
 				field("Viewable", "No - "+e.NoView)
 			}
@@ -255,9 +259,9 @@ func (s *Session) arcDetails(name string, arc *Archive, idx, depth int) int {
 		s.GotoXY(x, 3+len(lines))
 		s.Print("\xC0", strings.Repeat("\xC4", boxW-2), "\xD9")
 
-		help := " Up/Dn=Prev/Next"
+		help := " Up/Dn=Prev/Next  PgUp/PgDn Home/End"
 		if e.Open != nil {
-			help += "  V/Enter=View"
+			help += "  Enter=View"
 		}
 		s.Bar(s.H, help+"  Esc/Q=Back to list", "", 0, 3)
 
@@ -266,6 +270,10 @@ func (s *Session) arcDetails(name string, arc *Archive, idx, depth int) int {
 			idx = max(idx-1, 0)
 		case kDown, kRight, 'n', 'N':
 			idx = min(idx+1, len(arc.Entries)-1)
+		case kPgUp:
+			idx = max(idx-max(s.H-4, 1), 0)
+		case kPgDn:
+			idx = min(idx+max(s.H-4, 1), len(arc.Entries)-1)
 		case kHome:
 			idx = 0
 		case kEnd:

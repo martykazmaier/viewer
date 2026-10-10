@@ -411,6 +411,10 @@ func (s *Session) mapSeq(intro byte, params string, final byte) int {
 		return kHome
 	case 'F', 'K':
 		return kEnd
+	case 'V':
+		return kPgUp
+	case 'U':
+		return kPgDn
 	case 'c':
 		if intro == '[' && params != "" {
 			switch params[0] {
