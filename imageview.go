@@ -12,6 +12,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	jxl "github.com/kpfaulkner/jxl-go"
 	"github.com/sirupsen/logrus"
@@ -165,11 +166,18 @@ func dither(img *image.RGBA, pal color.Palette) *image.Paletted {
 
 // sixelEncode returns the DCS header, one chunk per six-pixel band, and the
 // string terminator, so output can be paced and interrupted between bands.
+// p may be a sub-image; only the colors it uses are defined.
 func sixelEncode(p *image.Paletted) [][]byte {
 	w, h := p.Rect.Dx(), p.Rect.Dy()
+	row := func(y int) []uint8 {
+		o := p.PixOffset(p.Rect.Min.X, p.Rect.Min.Y+y)
+		return p.Pix[o : o+w]
+	}
 	used := make([]bool, len(p.Palette))
-	for _, ix := range p.Pix {
-		used[ix] = true
+	for y := 0; y < h; y++ {
+		for _, ix := range row(y) {
+			used[ix] = true
+		}
 	}
 	var hdr bytes.Buffer
 	fmt.Fprintf(&hdr, "\x1bP0;1;0q\"1;1;%d;%d", w, h)
@@ -186,7 +194,7 @@ func sixelEncode(p *image.Paletted) [][]byte {
 		var seen [256]bool
 		var order []uint8
 		for r := 0; r < rows; r++ {
-			for _, ix := range p.Pix[(y0+r)*p.Stride : (y0+r)*p.Stride+w] {
+			for _, ix := range row(y0 + r) {
 				if !seen[ix] {
 					seen[ix] = true
 					order = append(order, ix)
@@ -194,12 +202,16 @@ func sixelEncode(p *image.Paletted) [][]byte {
 			}
 		}
 		var band bytes.Buffer
+		var band6 [6][]uint8
+		for r := 0; r < rows; r++ {
+			band6[r] = row(y0 + r)
+		}
 		for _, c := range order {
 			last := -1
 			for x := 0; x < w; x++ {
 				var v byte
 				for r := 0; r < rows; r++ {
-					if p.Pix[(y0+r)*p.Stride+x] == c {
+					if band6[r][x] == c {
 						v |= 1 << r
 					}
 				}
@@ -289,21 +301,132 @@ func (s *Session) pixelArea() (w, h, cw, ch int) {
 	return s.W * cw, (s.H-1)*ch - 6, cw, ch
 }
 
+func (s *Session) cellKnown() bool {
+	return s.pxW > 0 && s.pxH > 0 || s.cellW > 0 && s.cellH > 0
+}
+
+// sixelStripHeight splits an image of height h into roughly ten strips, each
+// a whole number of six-pixel bands and character rows, so every strip can
+// start at a cursor position. Without a known cell size it can't be aligned,
+// so the image is sent in one piece.
+func sixelStripHeight(h, ch int, known bool) int {
+	if !known {
+		return h
+	}
+	a, b := 6, ch
+	for b != 0 {
+		a, b = b, a%b
+	}
+	l := 6 * ch / a
+	return l * max(1, (h/10+l-1)/l)
+}
+
+// busy runs fn in the background, animating the status line until it
+// finishes. Returns false if the user cancelled or fn panicked.
+func (s *Session) busy(label string, fn func()) bool {
+	done := make(chan bool, 1)
+	go func() {
+		defer func() { done <- recover() == nil }()
+		fn()
+	}()
+	start := time.Now()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for i := 0; ; i++ {
+		sec := int(time.Since(start).Seconds())
+		s.Bar(s.H, fmt.Sprintf(" %s %c  %d:%02d", label, `|/-\`[i%4], sec/60, sec%60), "Esc=Cancel ", 15, 1)
+		s.flush()
+		select {
+		case ok := <-done:
+			return ok
+		case <-tick.C:
+		}
+		for s.keyAvailable() {
+			switch k := s.getKey(0); {
+			case k == kEsc && time.Now().Before(s.escGuard):
+			case k == kEsc, k == 'q', k == 'Q':
+				return false
+			}
+		}
+	}
+}
+
+// progress shows a transfer bar with bytes sent and time remaining on the
+// status line.
+type progress struct {
+	s           *Session
+	label       string
+	done, total int
+	start, last time.Time
+}
+
+func (s *Session) newProgress(label string, total int) *progress {
+	return &progress{s: s, label: label, total: max(total, 1), start: time.Now()}
+}
+
+func (p *progress) add(n int) { p.done = min(p.done+n, p.total) }
+
+// show redraws the bar; unless forced, at most a few times per second.
+func (p *progress) show(force bool) {
+	if !force && time.Since(p.last) < 300*time.Millisecond {
+		return
+	}
+	p.last = time.Now()
+	const n = 20
+	fill := p.done * n / p.total
+	bar := strings.Repeat("\xDB", fill) + strings.Repeat("\xB0", n-fill)
+	kb := func(n int) string { return fmtNum(int64(n+1023)/1024) + "K" }
+	left := fmt.Sprintf(" %s %3d%% %s %s of %s", p.label, p.done*100/p.total, bar, kb(p.done), kb(p.total))
+	eta := -1
+	if p.s.Baud > 0 {
+		eta = (p.total - p.done) * 10 / p.s.Baud
+	} else if el := time.Since(p.start); el > time.Second && p.done > 0 {
+		eta = int(el.Seconds() * float64(p.total-p.done) / float64(p.done))
+	}
+	right := "Any key stops "
+	if eta >= 0 {
+		right = fmt.Sprintf("%d:%02d left  %s", eta/60, eta%60, right)
+	}
+	p.s.Bar(p.s.H, left, right, 15, 1)
+	p.s.flush()
+}
+
 // drawSixel renders img as Sixel graphics; returns false if interrupted.
 func (s *Session) drawSixel(img image.Image) (bool, string) {
-	bw, bh, cw, _ := s.pixelArea()
+	bw, bh, cw, ch := s.pixelArea()
 	b := img.Bounds()
 	w, h := fitSize(b.Dx(), b.Dy(), bw, bh)
-	sc := scaleImage(img, w, h)
-	chunks := sixelEncode(dither(sc, medianCut(sc, 256)))
-	s.GotoXY((bw-w)/2/cw+1, 1)
-	s.flush()
-	for i, c := range chunks {
-		if i > 0 && i < len(chunks)-1 && s.keyAvailable() {
-			s.rawSend([]byte("\x1b\\"))
-			return false, ""
+	step := sixelStripHeight(h, ch, s.cellKnown())
+	var strips [][][]byte
+	if !s.busy("Preparing image", func() {
+		sc := scaleImage(img, w, h)
+		p := dither(sc, medianCut(sc, 256))
+		for y := 0; y < h; y += step {
+			strips = append(strips, sixelEncode(p.SubImage(image.Rect(0, y, w, min(y+step, h))).(*image.Paletted)))
 		}
-		s.paced(c, false)
+	}) {
+		return false, ""
+	}
+	total := 0
+	for _, chunks := range strips {
+		for _, c := range chunks {
+			total += len(c)
+		}
+	}
+	pr := s.newProgress("Sending image", total)
+	col := (bw-w)/2/cw + 1
+	for k, chunks := range strips {
+		pr.show(true)
+		s.GotoXY(col, 1+k*step/ch)
+		s.flush()
+		for i, c := range chunks {
+			if i > 0 && i < len(chunks)-1 && s.keyAvailable() {
+				s.rawSend([]byte("\x1b\\"))
+				return false, ""
+			}
+			s.paced(c, false)
+			pr.add(len(c))
+		}
 	}
 	return true, fmt.Sprintf("Sixel %dx%d", w, h)
 }
@@ -313,8 +436,13 @@ func (s *Session) drawSixel(img image.Image) (bool, string) {
 func (s *Session) drawBlocks(img image.Image) (bool, string) {
 	b := img.Bounds()
 	w, h := fitSize(b.Dx(), b.Dy(), s.W, (s.H-1)*2)
-	p := orderedCGA(scaleImage(img, w, h))
+	var p *image.Paletted
+	if !s.busy("Preparing image", func() { p = orderedCGA(scaleImage(img, w, h)) }) {
+		return false, ""
+	}
 	ox := (s.W-w)/2 + 1
+	var rows [][]byte
+	total := 0
 	for y := 0; y < h; y += 2 {
 		s.GotoXY(ox, y/2+1)
 		for x := 0; x < w; x++ {
@@ -338,17 +466,33 @@ func (s *Session) drawBlocks(img image.Image) (bool, string) {
 				s.Print("\xDF")
 			}
 		}
+		rows = append(rows, s.takeOut())
+		total += len(rows[len(rows)-1])
+	}
+	pr := s.newProgress("Sending image", total)
+	for _, r := range rows {
+		pr.show(false)
+		ok := s.paced(r, true)
+		pr.add(len(r))
+		if !ok {
+			s.ResetAttr()
+			return false, ""
+		}
 	}
 	s.ResetAttr()
-	return s.paced(s.takeOut(), true), fmt.Sprintf("ANSI %dx%d", w, (h+1)/2)
+	return true, fmt.Sprintf("ANSI %dx%d", w, (h+1)/2)
 }
 
 func (s *Session) imageView(name, format string, data []byte) {
 	s.Cls()
-	s.Color(14, 0)
-	s.Print("Decoding " + format + " image...")
-	s.flush()
-	img, err := decodeImage(data, format)
+	var img image.Image
+	var err error
+	if !s.busy("Decoding "+format+" image", func() { img, err = decodeImage(data, format) }) {
+		return
+	}
+	if err == nil && img == nil {
+		err = fmt.Errorf("the %s data could not be decoded", format)
+	}
 	if err != nil {
 		s.message(safeText(name), "Cannot display image: "+err.Error())
 		return

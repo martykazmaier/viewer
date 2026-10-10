@@ -26,7 +26,11 @@ Builds are available for Windows and Linux.
   scaled to fit the screen and shown as Sixel graphics with an adaptive
   256-color palette when the caller's terminal supports Sixel, or as
   16-color ANSI half blocks otherwise. Baud rate emulation applies, and a
-  keypress interrupts a slow image cleanly.
+  keypress interrupts a slow image cleanly. The status line shows a spinner
+  while the image is decoded, then a progress bar with the amount sent and
+  the time left. When the terminal reports its character cell size, Sixel
+  images are sent in horizontal strips, so the picture fills in as it arrives
+  even on terminals that only draw a Sixel image once it is complete.
 - **Archive browser**: light-bar file list with size, compression ratio, date
   and time, plus a details screen for each file (full long name, folder,
   sizes, method, CRC-32, attributes, host OS, comments). Files inside archives

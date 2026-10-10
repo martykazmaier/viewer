@@ -179,6 +179,41 @@ func TestSixelRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSixelStrips(t *testing.T) {
+	for _, c := range []struct{ h, ch, want int }{{378, 16, 48}, {378, 8, 48}, {600, 12, 60}, {90, 16, 48}, {378, 16, 378}} {
+		if got := sixelStripHeight(c.h, c.ch, c.want != c.h); got != c.want {
+			t.Errorf("sixelStripHeight(%d, %d) = %d, want %d", c.h, c.ch, got, c.want)
+		}
+	}
+	src := gradient(53, 70)
+	p := dither(src, medianCut(src, 256))
+	const step = 24
+	for y0 := 0; y0 < 70; y0 += step {
+		var all []byte
+		for _, c := range sixelEncode(p.SubImage(image.Rect(0, y0, 53, min(y0+step, 70))).(*image.Paletted)) {
+			all = append(all, c...)
+		}
+		regs, pix := decodeSixel(t, all)
+		for _, row := range pix {
+			for _, ix := range row {
+				if _, ok := regs[ix]; !ok {
+					t.Fatalf("strip at %d uses undefined register %d", y0, ix)
+				}
+			}
+		}
+		if len(pix) != min(step, 70-y0) {
+			t.Fatalf("strip at %d has %d rows", y0, len(pix))
+		}
+		for y := range pix {
+			for x := 0; x < 53; x++ {
+				if want := int(p.ColorIndexAt(x, y0+y)); pix[y][x] != want {
+					t.Fatalf("strip %d pixel %d,%d = %d, want %d", y0, x, y, pix[y][x], want)
+				}
+			}
+		}
+	}
+}
+
 func TestFitSize(t *testing.T) {
 	if w, h := fitSize(1920, 1080, 640, 378); w != 640 || h != 360 {
 		t.Errorf("1920x1080 -> %dx%d", w, h)
