@@ -307,8 +307,11 @@ func extractSound(ctx context.Context, ff, file string, start float64, encs []au
 	go func() {
 		defer close(c.done)
 		for _, e := range encs {
+			// libsndfile rejects Ogg Opus whose first page starts at or
+			// before sample 0, which ffmpeg writes for audio that begins a
+			// hair early (common in MP4s); start it 1ms in instead.
 			args := append([]string{"-nostdin", "-v", "error", "-ss", strconv.FormatFloat(start, 'f', 3, 64),
-				"-i", file, "-vn", "-sn", "-t", strconv.Itoa(segmentLen)}, e.args...)
+				"-i", file, "-vn", "-sn", "-t", strconv.Itoa(segmentLen), "-af", "asetpts=N/SR/TB+0.001/TB"}, e.args...)
 			out, err := exec.CommandContext(ctx, ff, append(args, "-")...).Output()
 			if err == nil && len(out) > 0 {
 				c.data, c.kind = out, e.name
