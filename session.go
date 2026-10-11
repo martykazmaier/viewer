@@ -26,7 +26,13 @@ const (
 	kDel     = 0x10A
 	kCPR     = 0x1FF
 	kDA      = 0x1FE
+	kAudio   = 0x1FD
 )
+
+// isKey reports whether k is a keypress rather than a timeout or a terminal report.
+func isKey(k int) bool {
+	return k != kTimeout && k != kNone && k != kCPR && k != kDA && k != kAudio
+}
 
 var baudRates = []int{0, 300, 1200, 2400, 9600, 14400, 19200, 28800, 38400, 57600, 115200}
 
@@ -44,6 +50,11 @@ type Session struct {
 	Idle     time.Duration
 	Deadline time.Time
 	Graphics string // auto, sixel or ansi
+	FFmpeg   string // ffmpeg.exe or its directory; empty = beside the viewer or on PATH
+
+	audioChecked bool
+	audioOK      bool
+	audioReport  string
 
 	gfxChecked    bool
 	sixel         bool
@@ -82,6 +93,7 @@ func newSession(cfg config) (*Session, error) {
 		Baud:     cfg.baud,
 		Music:    cfg.music,
 		Graphics: cfg.graphics,
+		FFmpeg:   cfg.ffmpeg,
 		Idle:     time.Duration(cfg.idle) * time.Minute,
 		lastAttr: -1,
 		W:        80,
@@ -440,6 +452,12 @@ func (s *Session) mapSeq(intro byte, params string, final byte) int {
 			}
 		}
 		return kNone
+	case 'n':
+		if intro == '[' && strings.HasPrefix(params, "=7;") {
+			s.audioReport = params[3:]
+			return kAudio
+		}
+		return kNone
 	case 'R':
 		if intro == '[' {
 			parts := strings.Split(params, ";")
@@ -484,15 +502,35 @@ func (s *Session) settle() {
 
 // waitKey blocks for a real keypress while enforcing the idle and time limits.
 func (s *Session) waitKey() int {
+	return s.waitKeyUntil(time.Time{}, nil)
+}
+
+// waitKeyUntil is waitKey that also returns 0 once until passes (if set) or
+// as soon as ready reports true (if given).
+func (s *Session) waitKeyUntil(until time.Time, ready func() bool) int {
 	s.flush()
 	start := time.Now()
 	for {
-		k := s.getKey(time.Second)
+		wait := time.Second
+		if ready != nil {
+			wait = 250 * time.Millisecond
+		}
+		if !until.IsZero() {
+			d := time.Until(until)
+			if d <= 0 {
+				return 0
+			}
+			wait = min(wait, d)
+		}
+		k := s.getKey(wait)
 		if k == kEsc && time.Now().Before(s.escGuard) {
 			continue
 		}
-		if k != kTimeout && k != kNone && k != kCPR {
+		if isKey(k) {
 			return k
+		}
+		if ready != nil && ready() {
+			return 0
 		}
 		if s.Idle > 0 && time.Since(start) > s.Idle {
 			s.fail("Idle time limit exceeded. Returning to the BBS.")

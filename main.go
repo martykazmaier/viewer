@@ -29,6 +29,7 @@ type config struct {
 	height   int
 	music    string
 	graphics string
+	ffmpeg   string
 	file     string
 }
 
@@ -46,10 +47,13 @@ Usage: viewer.exe [options] <file>
              ansi = ESC[M, strip = remove
   -G<mode>   Graphics: auto (default, Sixel if the terminal reports it),
              sixel = always Sixel, ansi = always ANSI half blocks
+  -F<path>   ffmpeg.exe (or its folder) for video previews
+             (default: beside viewer.exe, then PATH)
   -N<n>      Node number (accepted for compatibility, ignored)
 
 Files: text (.txt .nfo .diz ...), ANSI (.ans .asc .ice .mus .ams ...),
 images (JPEG, JPEG XL, PNG, GIF, BMP, TIFF, WebP),
+video (MP4, MKV, WebM, AVI, MOV, WMV, MPEG ... via ffmpeg),
 archives (ZIP, RAR 4/5, ARJ, LHA/LZH, TAR, plus .gz/.tgz/.bz2 wrappers).
 `
 
@@ -114,6 +118,8 @@ func parseArgs(args []string) (config, error) {
 			default:
 				err = fmt.Errorf("unknown graphics mode %q", v)
 			}
+		case "F":
+			cfg.ffmpeg = strings.Trim(v, `"`)
 		case "?":
 			err = errUsage
 		default:

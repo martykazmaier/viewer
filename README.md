@@ -32,6 +32,13 @@ Builds are available for Windows and Linux.
   the time left. When the terminal reports its character cell size, Sixel
   images are sent in horizontal strips, so the picture fills in as it arrives
   even on terminals that only draw a Sixel image once it is complete.
+- **Video previews**: MP4, MKV, WebM, AVI, MOV, WMV, MPEG and other formats
+  ffmpeg can read are shown as a slideshow of 4 to 16 frames spread across
+  the video (one every 3 seconds), drawn with Sixel or ANSI blocks. On
+  terminals with SyncTERM's BBS audio support (SyncTERM, IcyTERM, RGTerm),
+  the start of the soundtrack (up to 2 minutes) plays along. It is sent as
+  Opus, Vorbis, FLAC or WAV, whichever the terminal reports it can decode.
+  Requires `ffmpeg.exe` beside `viewer.exe`, on the PATH, or given with `-F`.
 - **Archive browser**: light-bar file list with size, compression ratio, date
   and time, plus a details screen for each file (full long name, folder,
   sizes, method, CRC-32, attributes, host OS, comments). Files inside archives
@@ -83,6 +90,7 @@ viewer [options] <file>
 | `-S<cols>x<rows>` | Force the screen size, e.g. `-S80x25` (default: auto-detect) |
 | `-M<mode>` | ANSI music handling (see below) |
 | `-G<mode>` | Graphics: `auto` (default), `sixel` or `ansi` (see below) |
+| `-F<path>` | `ffmpeg.exe`, or the folder containing it, for video previews (default: beside `viewer.exe`, then the PATH) |
 | `-N<n>` | Node number (accepted for compatibility, ignored) |
 
 Options use the BBS style with the value attached (`-B2400`, not `-B 2400`).
@@ -181,6 +189,11 @@ Home/End to scroll; `B` to change the baud rate; `Q` or Esc to close.
 the baud rate (ANSI blocks only); `R` to redraw; `I` for image and terminal information; Enter,
 Space, `Q` or Esc to close.
 
+**Video slideshow:** Left/Right (or Space and `B`) for the previous or next
+frame; Home/End; `P` to pause; `A` to turn the sound off or on; `M` to switch
+between Sixel and ANSI blocks; `R` to redraw; `I` for video and sound
+details; Enter, `Q` or Esc to close. The slideshow stops on the last frame.
+
 **After an ANSI file:** Enter, Space, `Q` or Esc to close; `R` to replay;
 `B` to change the baud rate; `M` to change the music mode (when the file has
 music); `I` for SAUCE information (when present).
@@ -230,6 +243,7 @@ the JPEG XL decoder used by the viewer. A copy of jxl-go is kept in
 | `ansiview.go` | ANSI viewer and SAUCE |
 | `music.go` | ANSI music detection, conversion and playback |
 | `imageview.go` | Image decoding, Sixel encoder and ANSI block renderer |
+| `videoview.go` | Video slideshow via ffmpeg and SyncTERM APC audio |
 | `arcview.go` | Archive light bar and details screen |
 | `archive.go`, `arc_zip.go`, `arc_rar.go`, `arc_dos.go` | Archive readers |
 | `cp437.go`, `textutil.go` | Character set and text helpers |
