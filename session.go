@@ -383,8 +383,9 @@ func (s *Session) decodeEsc() int {
 		s.unread(b)
 		return kEsc
 	}
+	// Terminal reports can be long: SyncTERM's DA reply is 24 parameter bytes.
 	var params []byte
-	for i := 0; i < 16; i++ {
+	for i := 0; i < 64; i++ {
 		c, ok := s.readByte(wait)
 		if !ok {
 			return kEsc

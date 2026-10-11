@@ -526,7 +526,7 @@ func (s *Session) imageView(name, format string, data []byte) {
 			if !useSixel {
 				right = fmt.Sprintf("M=%s B=Baud:%s R=Redraw I=Info Q=Quit ", mode, baudLabel(s.Baud))
 			}
-			left := fmt.Sprintf(" %s  %dx%d %s  [%s]", safeText(name), b.Dx(), b.Dy(), format, shown)
+			left := fmt.Sprintf(" %s %dx%d %s [%s]", safeText(name), b.Dx(), b.Dy(), format, shown)
 			s.Bar(s.H, fit(left, max(s.W-2-len(right), 0)), right, 15, 1)
 			s.flush()
 			k := s.waitKey()
