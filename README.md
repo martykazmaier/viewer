@@ -177,9 +177,7 @@ VT/xterm forms (`ESC[5~`, `ESC[6~`, `ESC[1~`, `ESC[4~`, `ESC[H`, `ESC[F`).
 **Text and hex viewer:** Up/Down, PgUp/PgDn (also Space, `+` and `-`),
 Home/End to scroll; `B` to change the baud rate; `Q` or Esc to close.
 
-**Image viewer:** images fill the whole screen with no status line; the keys
-are listed in the `I` info box. A key pressed while an image is drawing stops
-it and is then acted on. `M` to switch between Sixel and ANSI blocks; `B` to change
+**Image viewer:** `M` to switch between Sixel and ANSI blocks; `B` to change
 the baud rate (ANSI blocks only); `R` to redraw; `I` for image and terminal information; Enter,
 Space, `Q` or Esc to close.
 

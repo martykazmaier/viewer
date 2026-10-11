@@ -287,9 +287,8 @@ func orderedCGA(img *image.RGBA) *image.Paletted {
 	return p
 }
 
-// pixelArea returns the drawable pixel size of the whole screen and the
-// character cell size. The height is a whole number of six-pixel bands, since
-// some terminals round a Sixel image up to one.
+// pixelArea returns the drawable pixel size above the status line and the
+// character cell size.
 func (s *Session) pixelArea() (w, h, cw, ch int) {
 	cw, ch = 8, 16
 	switch {
@@ -299,14 +298,7 @@ func (s *Session) pixelArea() (w, h, cw, ch int) {
 		cw, ch = s.cellW, s.cellH
 	}
 	cw, ch = min(max(cw, 4), 32), min(max(ch, 6), 64)
-	return s.W * cw, s.H * ch / 6 * 6, cw, ch
-}
-
-func (s *Session) clearStatus() {
-	s.GotoXY(1, s.H)
-	s.ResetAttr()
-	s.ClrEol()
-	s.flush()
+	return s.W * cw, (s.H-1)*ch - 6, cw, ch
 }
 
 func (s *Session) cellKnown() bool {
@@ -426,22 +418,9 @@ func (s *Session) drawSixel(img image.Image) (bool, string) {
 	}
 	pr := s.newProgress("Sending image", total, false)
 	col := (bw-w)/2/cw + 1
-	row := (s.H*ch-h)/2/ch + 1
-	// Mode 8452 leaves the cursor beside the image instead of below it, so an
-	// image ending on the bottom row doesn't scroll the screen.
-	s.Print("\x1b[?8452h")
-	defer s.rawSend([]byte("\x1b[?8452l"))
-	barOn := true
 	for k, chunks := range strips {
-		top := k * step
-		if bottom := row + (min(top+step, h)-1)/ch; bottom < s.H {
-			pr.show(true)
-			barOn = true
-		} else if barOn {
-			s.clearStatus()
-			barOn = false
-		}
-		s.GotoXY(col, row+top/ch)
+		pr.show(true)
+		s.GotoXY(col, 1+k*step/ch)
 		s.flush()
 		for i, c := range chunks {
 			if i > 0 && i < len(chunks)-1 && s.keyAvailable() {
@@ -452,9 +431,6 @@ func (s *Session) drawSixel(img image.Image) (bool, string) {
 			pr.add(len(c))
 		}
 	}
-	if barOn {
-		s.clearStatus()
-	}
 	return true, fmt.Sprintf("Sixel %dx%d", w, h)
 }
 
@@ -462,21 +438,16 @@ func (s *Session) drawSixel(img image.Image) (bool, string) {
 // terminals without Sixel support.
 func (s *Session) drawBlocks(img image.Image) (bool, string) {
 	b := img.Bounds()
-	w, h := fitSize(b.Dx(), b.Dy(), s.W, s.H*2)
-	if w == s.W && (h+1)/2 >= s.H {
-		// Writing the bottom-right cell scrolls some terminals.
-		w, h = fitSize(b.Dx(), b.Dy(), s.W-1, s.H*2)
-	}
+	w, h := fitSize(b.Dx(), b.Dy(), s.W, (s.H-1)*2)
 	var p *image.Paletted
 	if !s.busy("Preparing image", func() { p = orderedCGA(scaleImage(img, w, h)) }) {
 		return false, ""
 	}
 	ox := (s.W-w)/2 + 1
-	oy := (s.H-(h+1)/2)/2 + 1
 	var rows [][]byte
 	total := 0
 	for y := 0; y < h; y += 2 {
-		s.GotoXY(ox, oy+y/2)
+		s.GotoXY(ox, y/2+1)
 		for x := 0; x < w; x++ {
 			t := int(p.ColorIndexAt(x, y))
 			bot := 0
@@ -502,24 +473,14 @@ func (s *Session) drawBlocks(img image.Image) (bool, string) {
 		total += len(rows[len(rows)-1])
 	}
 	pr := s.newProgress("Sending image", total, true)
-	barOn, first := true, true
-	for i, r := range rows {
-		if oy+i < s.H {
-			pr.show(first)
-			first = false
-		} else if barOn {
-			s.clearStatus()
-			barOn = false
-		}
+	for _, r := range rows {
+		pr.show(false)
 		ok := s.paced(r, true)
 		pr.add(len(r))
 		if !ok {
 			s.ResetAttr()
 			return false, ""
 		}
-	}
-	if barOn {
-		s.clearStatus()
 	}
 	s.ResetAttr()
 	return true, fmt.Sprintf("ANSI %dx%d", w, (h+1)/2)
@@ -542,11 +503,6 @@ func (s *Session) imageView(name, format string, data []byte) {
 	s.detectGraphics()
 	useSixel := s.sixel
 	b := img.Bounds()
-	s.Print("\x1b[?25l")
-	defer func() {
-		s.Print("\x1b[?25h")
-		s.flush()
-	}()
 	for {
 		s.Cls()
 		s.flush()
@@ -557,18 +513,23 @@ func (s *Session) imageView(name, format string, data []byte) {
 		} else {
 			ok, shown = s.drawBlocks(img)
 		}
-		k := 0
 		if !ok {
+			s.getKey(0)
 			shown = "interrupted"
-			if k = s.getKey(0); k == kTimeout {
-				k = 0
-			}
 		}
 		for {
-			if k == 0 {
-				s.flush()
-				k = s.waitKey()
+			mode := "Sixel"
+			if useSixel {
+				mode = "ANSI"
 			}
+			right := fmt.Sprintf("M=%s R=Redraw I=Info Q=Quit ", mode)
+			if !useSixel {
+				right = fmt.Sprintf("M=%s B=Baud:%s R=Redraw I=Info Q=Quit ", mode, baudLabel(s.Baud))
+			}
+			left := fmt.Sprintf(" %s  %dx%d %s  [%s]", safeText(name), b.Dx(), b.Dy(), format, shown)
+			s.Bar(s.H, fit(left, max(s.W-2-len(right), 0)), right, 15, 1)
+			s.flush()
+			k := s.waitKey()
 			switch k {
 			case 'm', 'M':
 				useSixel = !useSixel
@@ -577,14 +538,12 @@ func (s *Session) imageView(name, format string, data []byte) {
 				if !useSixel {
 					s.Baud = nextBaud(s.Baud)
 				}
-				k = 0
 				continue
 			case 'i', 'I':
-				s.imageInfo(name, format, len(data), b, shown)
+				s.imageInfo(name, format, len(data), b, useSixel)
 			case kEnter, kEsc, 'q', 'Q', ' ':
 				return
 			default:
-				k = 0
 				continue
 			}
 			break
@@ -592,7 +551,7 @@ func (s *Session) imageView(name, format string, data []byte) {
 	}
 }
 
-func (s *Session) imageInfo(name, format string, size int, b image.Rectangle, shown string) {
+func (s *Session) imageInfo(name, format string, size int, b image.Rectangle, sixel bool) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "File:     %s\n", safeText(name))
 	fmt.Fprintf(&sb, "Format:   %s, %dx%d pixels\n", format, b.Dx(), b.Dy())
@@ -603,9 +562,10 @@ func (s *Session) imageInfo(name, format string, size int, b image.Rectangle, sh
 	if s.sixelReported {
 		support = "reported by terminal"
 	}
-	fmt.Fprintf(&sb, "Sixel:    %s\nShowing:  %s\n", support, shown)
-	fmt.Fprintf(&sb, "Baud:     %s (ANSI blocks only)\n\n", baudLabel(s.Baud))
-	sb.WriteString("Keys:     M=Sixel/ANSI  B=Baud  R=Redraw  I=Info\n")
-	sb.WriteString("          Enter, Space, Q or Esc to close")
+	mode := "ANSI blocks"
+	if sixel {
+		mode = "Sixel"
+	}
+	fmt.Fprintf(&sb, "Sixel:    %s\nShowing:  %s", support, mode)
 	s.message("Image", sb.String())
 }
