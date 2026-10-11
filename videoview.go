@@ -19,8 +19,6 @@ import (
 	"time"
 )
 
-const slideDelay = 3 * time.Second
-
 var videoExts = map[string]bool{
 	".mp4": true, ".m4v": true, ".mkv": true, ".webm": true, ".avi": true, ".mov": true,
 	".wmv": true, ".asf": true, ".flv": true, ".mpg": true, ".mpeg": true, ".m2ts": true,
@@ -138,9 +136,16 @@ func grabFrame(ctx context.Context, ff, file string, t float64, w, h int) (image
 	return decodePPM(out)
 }
 
-// decodePPM reads a binary (P6) 8-bit PPM.
 func decodePPM(data []byte) (image.Image, error) {
-	r := bufio.NewReader(bytes.NewReader(data))
+	return readPPM(bufio.NewReader(bytes.NewReader(data)))
+}
+
+// readPPM reads one binary (P6) 8-bit PPM; ffmpeg's image2pipe output is a
+// stream of them. io.EOF means the stream ended cleanly between frames.
+func readPPM(r *bufio.Reader) (image.Image, error) {
+	if _, err := r.Peek(1); err != nil {
+		return nil, io.EOF
+	}
 	var vals [4]int
 	for i := 0; i < 4; {
 		var tok []byte
@@ -197,22 +202,44 @@ func fmtDur(sec float64) string {
 	return fmt.Sprintf("%d:%02d", t/60, t%60)
 }
 
-// frameTimes spreads n frames evenly across the video, one per 8 seconds,
-// between 4 and 16 frames. Without a known duration it samples every 10s.
-func frameTimes(duration float64) []float64 {
-	if duration <= 0 {
-		t := make([]float64, 8)
-		for i := range t {
-			t[i] = float64(i * 10)
+const (
+	playFPS    = 4   // frames decoded per second of video
+	segmentLen = 120 // seconds of video and sound fetched at a time
+)
+
+type frame struct {
+	t   float64 // position in the video, seconds
+	img image.Image
+}
+
+// streamFrames decodes segmentLen seconds of video from start at playFPS.
+// The channel closes at the end of the segment, the video, or ctx.
+func streamFrames(ctx context.Context, ff, file string, start float64, w, h int) <-chan frame {
+	ch := make(chan frame, 2)
+	go func() {
+		defer close(ch)
+		vf := fmt.Sprintf("fps=%d,scale=iw*sar:ih,scale=%d:%d:force_original_aspect_ratio=decrease", playFPS, w, h)
+		cmd := exec.CommandContext(ctx, ff, "-nostdin", "-v", "error", "-ss", strconv.FormatFloat(start, 'f', 3, 64),
+			"-i", file, "-t", strconv.Itoa(segmentLen), "-an", "-sn", "-vf", vf, "-f", "image2pipe", "-c:v", "ppm", "-")
+		out, err := cmd.StdoutPipe()
+		if err != nil || cmd.Start() != nil {
+			return
 		}
-		return t
-	}
-	n := min(max(int(duration/8), 4), 16)
-	t := make([]float64, n)
-	for i := range t {
-		t[i] = duration * (float64(i) + 0.5) / float64(n)
-	}
-	return t
+		defer cmd.Wait()
+		r := bufio.NewReaderSize(out, 1<<20)
+		for i := 0; ; i++ {
+			img, err := readPPM(r)
+			if err != nil {
+				return
+			}
+			select {
+			case ch <- frame{start + float64(i)/playFPS, img}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch
 }
 
 // ---- terminal audio (SyncTERM APC) ----
@@ -256,36 +283,35 @@ func (s *Session) audioFormatOK(major, sub int) bool {
 type audioEnc struct {
 	name       string
 	major, sub int
-	maxSec     int
 	args       []string
 }
 
 var audioEncoders = []audioEnc{
-	{"Opus", 32, 100, 120, []string{"-c:a", "libopus", "-b:a", "32k", "-ac", "2", "-ar", "48000", "-f", "ogg"}},
-	{"Vorbis", 32, 96, 120, []string{"-c:a", "libvorbis", "-q:a", "2", "-ac", "2", "-ar", "44100", "-f", "ogg"}},
-	{"FLAC", 23, 2, 60, []string{"-c:a", "flac", "-sample_fmt", "s16", "-ac", "1", "-ar", "22050", "-f", "flac"}},
-	{"WAV", 1, 5, 60, []string{"-c:a", "pcm_u8", "-ac", "1", "-ar", "11025", "-f", "wav"}},
+	{"Opus", 32, 100, []string{"-c:a", "libopus", "-b:a", "32k", "-ac", "2", "-ar", "48000", "-f", "ogg"}},
+	{"Vorbis", 32, 96, []string{"-c:a", "libvorbis", "-q:a", "2", "-ac", "2", "-ar", "44100", "-f", "ogg"}},
+	{"FLAC", 23, 2, []string{"-c:a", "flac", "-sample_fmt", "s16", "-ac", "1", "-ar", "11025", "-f", "flac"}},
+	{"WAV", 1, 5, []string{"-c:a", "pcm_u8", "-ac", "1", "-ar", "8000", "-f", "wav"}},
 }
 
 type soundClip struct {
 	data []byte
 	kind string
-	secs int
 	err  error
 	done chan struct{}
 }
 
-// extractSound encodes the start of the soundtrack with the first encoder
-// the terminal accepts and this ffmpeg build provides.
-func extractSound(ctx context.Context, ff, file string, encs []audioEnc) *soundClip {
+// extractSound encodes segmentLen seconds of the soundtrack from start with
+// the first encoder the terminal accepts and this ffmpeg build provides.
+func extractSound(ctx context.Context, ff, file string, start float64, encs []audioEnc) *soundClip {
 	c := &soundClip{done: make(chan struct{})}
 	go func() {
 		defer close(c.done)
 		for _, e := range encs {
-			args := append([]string{"-nostdin", "-v", "error", "-i", file, "-vn", "-sn", "-t", strconv.Itoa(e.maxSec)}, e.args...)
+			args := append([]string{"-nostdin", "-v", "error", "-ss", strconv.FormatFloat(start, 'f', 3, 64),
+				"-i", file, "-vn", "-sn", "-t", strconv.Itoa(segmentLen)}, e.args...)
 			out, err := exec.CommandContext(ctx, ff, append(args, "-")...).Output()
 			if err == nil && len(out) > 0 {
-				c.data, c.kind, c.secs = out, e.name, e.maxSec
+				c.data, c.kind = out, e.name
 				return
 			}
 			if ctx.Err() != nil {
@@ -306,10 +332,13 @@ func (s *Session) sendSound(c *soundClip) {
 	s.rawSend(apc("A;LoadBlob;S=1;" + b64))
 }
 
+// playSound starts slot 1 on channel 2 and waits until the terminal reports
+// the channel playing, so the picture clock can start with the sound.
 func (s *Session) playSound() {
 	s.rawSend(apc("A;Flush;C=2"))
-	s.rawSend(apc("A;Copy;S=1;D=0"))
-	s.rawSend(apc("A;Queue;C=2;S=0;I=200"))
+	s.rawSend(apc("A;Queue;C=2;S=1"))
+	s.rawSend([]byte("\x1b[=7;2n"))
+	s.awaitAudio("2;", 3*time.Second)
 }
 
 func (s *Session) stopSound() {
@@ -358,159 +387,249 @@ func (s *Session) videoView(name string, r io.ReaderAt, size int64) {
 	s.detectGraphics()
 	useSixel := s.sixel
 
-	var sound *soundClip
-	soundOn, soundSent := true, false
+	var encs []audioEnc
 	if vi.acodec != "" && s.detectAudio() {
-		var encs []audioEnc
 		for _, e := range audioEncoders {
 			if s.audioFormatOK(e.major, e.sub) {
 				encs = append(encs, e)
 			}
 		}
-		if len(encs) > 0 {
-			sound = extractSound(ctx, ff, file, encs)
-		}
-	}
-	defer func() {
-		if soundSent {
-			s.stopSound()
-		}
-	}()
-	soundReady := func() bool {
-		if sound == nil || !soundOn || soundSent {
-			return false
-		}
-		select {
-		case <-sound.done:
-			return true
-		default:
-			return false
-		}
 	}
 
-	times := frameTimes(vi.duration)
 	bw, bh, _, _ := s.pixelArea()
-	frames := make([]image.Image, len(times))
-	errs := make([]error, len(times))
-	ready := make([]chan struct{}, len(times))
-	for i := range ready {
-		ready[i] = make(chan struct{})
+	step := max(vi.duration/16, 10)
+	clamp := func(t float64) float64 {
+		if vi.duration > 0 {
+			t = min(t, max(vi.duration-1, 0))
+		}
+		return max(t, 0)
 	}
-	go func() {
-		for i, t := range times {
-			if ctx.Err() != nil {
-				return
-			}
-			frames[i], errs[i] = grabFrame(ctx, ff, file, t, bw, bh)
-			close(ready[i])
+	pos, paused, ended, soundOn := 0.0, false, false, true
+	soundKind, soundNote, shown := "", "", ""
+	var last image.Image
+	playing := false
+	halt := func() {
+		if playing {
+			s.stopSound()
+			playing = false
 		}
-	}()
-
-	idx, paused, redraw := 0, false, true
-	shown := ""
-	for {
-		if redraw {
-			if !s.busy(fmt.Sprintf("Extracting frame %d of %d", idx+1, len(times)), func() { <-ready[idx] }) {
-				return
-			}
-			if errs[idx] != nil {
-				shown = "no picture"
-				s.Cls()
-				s.GotoXY(2, 2)
-				s.Color(12, 0)
-				s.Print(fit(errs[idx].Error(), s.W-2))
-			} else {
-				var ok bool
-				if useSixel {
-					ok, shown = s.drawSixel(frames[idx])
-				} else {
-					ok, shown = s.drawBlocks(frames[idx])
-				}
-				if !ok {
-					shown = "interrupted"
-				}
-			}
-			redraw = false
+	}
+	defer halt()
+	draw := func(img image.Image) {
+		last = img
+		var ok bool
+		if useSixel {
+			ok, shown = s.drawSixel(img, true)
+		} else {
+			ok, shown = s.drawBlocks(img, true)
 		}
-		if soundReady() {
-			if sound.err == nil {
-				s.sendSound(sound)
-				s.playSound()
-				soundSent = true
-			} else {
-				sound = nil
-			}
+		if !ok {
+			shown = "interrupted"
 		}
-
-		state := "Playing"
-		if paused {
-			state = "Paused"
+	}
+	redraw := func() {
+		s.Cls()
+		if last != nil {
+			draw(last)
 		}
-		left := fmt.Sprintf(" %d/%d %s/%s %s  %s", idx+1, len(times), fmtDur(times[idx]), fmtDur(vi.duration), state, safeText(name))
-		right := "<-/->=Frame P=Pause I=Info Q=Quit "
-		if sound != nil {
-			right = "<-/->=Frame P=Pause A=Sound I=Info Q=Quit "
+	}
+	bar := func(t float64, state string) {
+		left := fmt.Sprintf(" %s/%s %s  %s", fmtDur(t), fmtDur(vi.duration), state, safeText(name))
+		right := "P=Pause <-/->=Seek I=Info Q=Quit "
+		if len(encs) > 0 {
+			right = "P=Pause <-/->=Seek A=Sound I=Info Q=Quit "
 		}
 		s.Bar(s.H, fit(left, max(s.W-2-len(right), 0)), right, 15, 1)
 		s.flush()
+	}
+	info := func() {
+		s.videoInfo(name, ff, vi, shown, len(encs) > 0, soundOn, soundKind, soundNote)
+		redraw()
+	}
 
-		var until time.Time
-		if !paused && idx < len(times)-1 {
-			until = time.Now().Add(slideDelay)
-		}
-		k := s.waitKeyUntil(until, soundReady)
-		if k == 0 {
-			if !soundReady() {
-				idx++
-				redraw = true
+	for {
+		if paused {
+			state := "Paused"
+			if ended {
+				state = "End"
+			}
+			bar(pos, state)
+			switch k := s.waitKey(); k {
+			case 'p', 'P', ' ':
+				if ended {
+					pos = 0
+				}
+				paused, ended = false, false
+			case kLeft, kRight, kHome, kEnd:
+				switch k {
+				case kLeft:
+					pos = clamp(pos - step)
+				case kRight:
+					pos = clamp(pos + step)
+				case kHome:
+					pos = 0
+				case kEnd:
+					pos = clamp(vi.duration)
+				}
+				ended = false
+				var img image.Image
+				var err error
+				if !s.busy("Seeking to "+fmtDur(pos), func() { img, err = grabFrame(ctx, ff, file, pos, bw, bh) }) {
+					return
+				}
+				if err == nil {
+					draw(img)
+				}
+			case 'a', 'A':
+				soundOn = !soundOn
+			case 'm', 'M':
+				useSixel = !useSixel
+				redraw()
+			case 'r', 'R':
+				redraw()
+			case 'i', 'I':
+				info()
+			case kEnter, kEsc, 'q', 'Q':
+				return
 			}
 			continue
 		}
-		switch k {
-		case kRight, kDown, ' ', 'n', 'N':
-			if idx < len(times)-1 {
-				idx++
-				redraw = true
-			}
-		case kLeft, kUp, 'b', 'B':
-			if idx > 0 {
-				idx--
-				redraw = true
-			}
-		case kHome:
-			idx, redraw = 0, true
-		case kEnd:
-			idx, redraw = len(times)-1, true
-		case 'p', 'P':
-			paused = !paused
-		case 'a', 'A':
-			if sound != nil {
-				soundOn = !soundOn
-				switch {
-				case !soundOn && soundSent:
-					s.stopSound()
-				case soundOn && soundSent:
-					s.playSound()
-				}
-			}
-		case 'm', 'M':
-			useSixel = !useSixel
-			s.Cls()
-			redraw = true
-		case 'r', 'R':
-			s.Cls()
-			redraw = true
-		case 'i', 'I':
-			s.videoInfo(name, ff, vi, len(times), shown, sound, soundOn)
-			s.Cls()
-			redraw = true
-		case kEnter, kEsc, 'q', 'Q':
+
+		// Play one segment from pos. Frames are timed against a clock that
+		// starts once the terminal reports the sound playing.
+		segStart := pos
+		segEnd := segStart + segmentLen
+		if vi.duration > 0 {
+			segEnd = min(segEnd, vi.duration)
+		}
+		segCtx, segCancel := context.WithCancel(ctx)
+		frames := streamFrames(segCtx, ff, file, segStart, bw, bh)
+		var sound *soundClip
+		if soundOn && len(encs) > 0 {
+			sound = extractSound(segCtx, ff, file, segStart, encs)
+		}
+		var first frame
+		var ok bool
+		if !s.busy("Loading video at "+fmtDur(segStart), func() { first, ok = <-frames }) {
+			segCancel()
 			return
 		}
+		if !ok {
+			segCancel()
+			if last == nil {
+				s.message(safeText(name), "Cannot preview video: ffmpeg could not decode any frames.")
+				return
+			}
+			paused, ended = true, true
+			continue
+		}
+		draw(first.img)
+		if sound != nil {
+			if !s.busy("Preparing sound", func() { <-sound.done }) {
+				segCancel()
+				return
+			}
+			if sound.err == nil {
+				soundKind = sound.kind
+				s.sendSound(sound)
+				s.playSound()
+				playing = true
+			} else {
+				soundNote = sound.err.Error()
+				encs = nil
+			}
+		}
+		clock, base := time.Now(), first.t
+		now := func() float64 { return base + time.Since(clock).Seconds() }
+		var pending *frame
+		done, lead := false, 0.0
+		var lastBar time.Time
+	play:
+		for {
+			// Show the newest frame that is due, skipping any the
+			// connection was too slow for.
+			var due *frame
+			for {
+				if pending == nil && !done {
+					select {
+					case f, ok := <-frames:
+						if ok {
+							pending = &f
+						} else {
+							done = true
+						}
+					default:
+					}
+				}
+				if pending == nil || pending.t > now()+lead {
+					break
+				}
+				due, pending = pending, nil
+			}
+			if due != nil {
+				t0 := time.Now()
+				draw(due.img)
+				lead = 0.7*lead + 0.3*time.Since(t0).Seconds()
+			}
+			if done && pending == nil && now() >= segEnd {
+				pos = segEnd
+				if vi.duration > 0 && segEnd >= vi.duration-0.5 {
+					pos, paused, ended = clamp(vi.duration), true, true
+				}
+				break
+			}
+			if time.Since(lastBar) >= time.Second {
+				bar(now(), "Playing")
+				lastBar = time.Now()
+			}
+
+			wait := 40 * time.Millisecond
+			if pending != nil {
+				wait = min(max(time.Duration((pending.t-lead-now())*float64(time.Second)), 5*time.Millisecond), 250*time.Millisecond)
+			}
+			switch k := s.waitKeyUntil(time.Now().Add(wait), nil); k {
+			case 'p', 'P', ' ':
+				pos, paused = clamp(now()), true
+				break play
+			case kLeft:
+				pos = clamp(now() - step)
+				break play
+			case kRight:
+				pos = clamp(now() + step)
+				break play
+			case kHome:
+				pos = 0
+				break play
+			case 'a', 'A':
+				if len(encs) > 0 {
+					soundOn = !soundOn
+					pos = clamp(now())
+					break play
+				}
+			case 'm', 'M':
+				useSixel = !useSixel
+				redraw()
+				lastBar = time.Time{}
+			case 'r', 'R':
+				redraw()
+				lastBar = time.Time{}
+			case 'i', 'I':
+				pos, paused = clamp(now()), true
+				segCancel()
+				halt()
+				info()
+				break play
+			case kEnter, kEsc, 'q', 'Q':
+				segCancel()
+				return
+			}
+		}
+		segCancel()
+		halt()
 	}
 }
 
-func (s *Session) videoInfo(name, ff string, vi videoInfo, frames int, shown string, sound *soundClip, soundOn bool) {
+func (s *Session) videoInfo(name, ff string, vi videoInfo, shown string, canSound, soundOn bool, kind, note string) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "File:     %s\n", safeText(name))
 	fmt.Fprintf(&sb, "Length:   %s\n", fmtDur(vi.duration))
@@ -518,32 +637,23 @@ func (s *Session) videoInfo(name, ff string, vi videoInfo, frames int, shown str
 	if vi.acodec != "" {
 		fmt.Fprintf(&sb, "Audio:    %s\n", vi.acodec)
 	}
-	fmt.Fprintf(&sb, "Preview:  %d frames, %s\n", frames, shown)
+	fmt.Fprintf(&sb, "Picture:  %d frames/s, %s\n", playFPS, shown)
 	switch {
 	case vi.acodec == "":
 		sb.WriteString("Sound:    none in this video\n")
 	case !s.audioOK:
 		sb.WriteString("Sound:    terminal has no BBS audio support\n")
-	case sound == nil:
+	case note != "":
+		fmt.Fprintf(&sb, "Sound:    %s\n", note)
+	case !canSound:
 		sb.WriteString("Sound:    no format both ffmpeg and the terminal support\n")
+	case !soundOn:
+		sb.WriteString("Sound:    off\n")
 	default:
-		state := "on"
-		if !soundOn {
-			state = "off"
-		}
-		select {
-		case <-sound.done:
-			secs := float64(sound.secs)
-			if vi.duration > 0 {
-				secs = min(secs, vi.duration)
-			}
-			fmt.Fprintf(&sb, "Sound:    %s, first %s, %s (%s KB)\n", sound.kind, fmtDur(secs), state, fmtNum(int64(len(sound.data)/1024)))
-		default:
-			sb.WriteString("Sound:    preparing\n")
-		}
+		fmt.Fprintf(&sb, "Sound:    %s, sent %d seconds at a time\n", kind, segmentLen)
 	}
 	fmt.Fprintf(&sb, "ffmpeg:   %s\n\n", ff)
-	sb.WriteString("Keys:     Left/Right=Frame Home/End P=Pause A=Sound\n")
+	sb.WriteString("Keys:     P/Space=Pause Left/Right=Seek Home A=Sound\n")
 	sb.WriteString("          M=Sixel/ANSI R=Redraw Q=Quit")
 	s.message("Video", sb.String())
 }

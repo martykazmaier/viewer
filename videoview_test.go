@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"io"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -68,16 +71,16 @@ func TestIsVideo(t *testing.T) {
 	}
 }
 
-func TestFrameTimes(t *testing.T) {
-	if n := len(frameTimes(10)); n != 4 {
-		t.Errorf("10s video: %d frames, want 4", n)
+func TestReadPPMStream(t *testing.T) {
+	one := "P6\n2 1\n255\n\xff\x00\x00\x00\xff\x00"
+	r := bufio.NewReader(strings.NewReader(one + one))
+	for i := 0; i < 2; i++ {
+		if img, err := readPPM(r); err != nil || img.Bounds().Dx() != 2 {
+			t.Fatalf("frame %d: %v", i, err)
+		}
 	}
-	if n := len(frameTimes(3600)); n != 16 {
-		t.Errorf("1h video: %d frames, want 16", n)
-	}
-	ts := frameTimes(80)
-	if len(ts) != 10 || ts[0] != 4 || ts[9] != 76 {
-		t.Errorf("80s video: %v", ts)
+	if _, err := readPPM(r); err != io.EOF {
+		t.Errorf("end of stream: %v, want io.EOF", err)
 	}
 }
 
@@ -100,8 +103,16 @@ func TestFFmpeg(t *testing.T) {
 	if b := img.Bounds(); b.Dx() > 640 || b.Dy() > 378 || b.Dx() < 600 {
 		t.Errorf("frame size %v", b)
 	}
+	n := 0
+	for f := range streamFrames(ctx, ff, file, 5, 320, 200) {
+		if want := 5 + float64(n)/playFPS; f.t != want {
+			t.Fatalf("frame %d at %v, want %v", n, f.t, want)
+		}
+		n++
+	}
+	t.Logf("streamed %d frames from 5s", n)
 	for _, e := range audioEncoders {
-		c := extractSound(ctx, ff, file, []audioEnc{e})
+		c := extractSound(ctx, ff, file, 5, []audioEnc{e})
 		<-c.done
 		t.Logf("%s: %d bytes, err %v", e.name, len(c.data), c.err)
 	}

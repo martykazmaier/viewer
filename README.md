@@ -33,11 +33,14 @@ Builds are available for Windows and Linux.
   images are sent in horizontal strips, so the picture fills in as it arrives
   even on terminals that only draw a Sixel image once it is complete.
 - **Video previews**: MP4, MKV, WebM, AVI, MOV, WMV, MPEG and other formats
-  ffmpeg can read are shown as a slideshow of 4 to 16 frames spread across
-  the video (one every 3 seconds), drawn with Sixel or ANSI blocks. On
-  terminals with SyncTERM's BBS audio support (SyncTERM, IcyTERM, RGTerm),
-  the start of the soundtrack (up to 2 minutes) plays along. It is sent as
-  Opus, Vorbis, FLAC or WAV, whichever the terminal reports it can decode.
+  ffmpeg can read play at up to 4 frames a second, drawn with Sixel or ANSI
+  blocks. On terminals with SyncTERM's BBS audio support (SyncTERM, IcyTERM,
+  RGTerm) the soundtrack plays along, sent 2 minutes at a time as Opus,
+  Vorbis, FLAC or WAV, whichever the terminal reports it can decode. The
+  picture follows the sound: the clock starts when the terminal reports the
+  sound playing, and frames the connection is too slow for are skipped
+  rather than falling behind. Without sound, frames keep the same real-time
+  pace.
   Requires `ffmpeg.exe` beside `viewer.exe`, on the PATH, or given with `-F`.
 - **Archive browser**: light-bar file list with size, compression ratio, date
   and time, plus a details screen for each file (full long name, folder,
@@ -189,10 +192,12 @@ Home/End to scroll; `B` to change the baud rate; `Q` or Esc to close.
 the baud rate (ANSI blocks only); `R` to redraw; `I` for image and terminal information; Enter,
 Space, `Q` or Esc to close.
 
-**Video slideshow:** Left/Right (or Space and `B`) for the previous or next
-frame; Home/End; `P` to pause; `A` to turn the sound off or on; `M` to switch
-between Sixel and ANSI blocks; `R` to redraw; `I` for video and sound
-details; Enter, `Q` or Esc to close. The slideshow stops on the last frame.
+**Video:** `P` or Space to pause and resume; Left/Right to jump back or ahead
+(a sixteenth of the video, at least 10 seconds), also while paused; Home to
+go back to the start; `A` to turn the sound off or on; `M` to switch between
+Sixel and ANSI blocks; `R` to redraw; `I` for video and sound details (pauses
+playback); Enter, `Q` or Esc to close. Playback pauses at the end; `P` then
+starts again from the beginning.
 
 **After an ANSI file:** Enter, Space, `Q` or Esc to close; `R` to replay;
 `B` to change the baud rate; `M` to change the music mode (when the file has
@@ -243,7 +248,7 @@ the JPEG XL decoder used by the viewer. A copy of jxl-go is kept in
 | `ansiview.go` | ANSI viewer and SAUCE |
 | `music.go` | ANSI music detection, conversion and playback |
 | `imageview.go` | Image decoding, Sixel encoder and ANSI block renderer |
-| `videoview.go` | Video slideshow via ffmpeg and SyncTERM APC audio |
+| `videoview.go` | Video playback via ffmpeg, synced to SyncTERM APC audio |
 | `arcview.go` | Archive light bar and details screen |
 | `archive.go`, `arc_zip.go`, `arc_rar.go`, `arc_dos.go` | Archive readers |
 | `cp437.go`, `textutil.go` | Character set and text helpers |

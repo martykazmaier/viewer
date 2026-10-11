@@ -395,19 +395,23 @@ func (p *progress) show(force bool) {
 }
 
 // drawSixel renders img as Sixel graphics; returns false if interrupted.
-func (s *Session) drawSixel(img image.Image) (bool, string) {
+// quiet is for video frames: no spinner or progress bar.
+func (s *Session) drawSixel(img image.Image, quiet bool) (bool, string) {
 	bw, bh, cw, ch := s.pixelArea()
 	b := img.Bounds()
 	w, h := fitSize(b.Dx(), b.Dy(), bw, bh)
 	step := sixelStripHeight(h, ch, s.cellKnown())
 	var strips [][][]byte
-	if !s.busy("Preparing image", func() {
+	prepare := func() {
 		sc := scaleImage(img, w, h)
 		p := dither(sc, medianCut(sc, 256))
 		for y := 0; y < h; y += step {
 			strips = append(strips, sixelEncode(p.SubImage(image.Rect(0, y, w, min(y+step, h))).(*image.Paletted)))
 		}
-	}) {
+	}
+	if quiet {
+		prepare()
+	} else if !s.busy("Preparing image", prepare) {
 		return false, ""
 	}
 	total := 0
@@ -419,7 +423,9 @@ func (s *Session) drawSixel(img image.Image) (bool, string) {
 	pr := s.newProgress("Sending image", total, false)
 	col := (bw-w)/2/cw + 1
 	for k, chunks := range strips {
-		pr.show(true)
+		if !quiet {
+			pr.show(true)
+		}
 		s.GotoXY(col, 1+k*step/ch)
 		s.flush()
 		for i, c := range chunks {
@@ -435,12 +441,16 @@ func (s *Session) drawSixel(img image.Image) (bool, string) {
 }
 
 // drawBlocks renders img with CP437 half blocks in the 16 ANSI colors, for
-// terminals without Sixel support.
-func (s *Session) drawBlocks(img image.Image) (bool, string) {
+// terminals without Sixel support. quiet is for video frames: no spinner,
+// progress bar or baud pacing.
+func (s *Session) drawBlocks(img image.Image, quiet bool) (bool, string) {
 	b := img.Bounds()
 	w, h := fitSize(b.Dx(), b.Dy(), s.W, (s.H-1)*2)
 	var p *image.Paletted
-	if !s.busy("Preparing image", func() { p = orderedCGA(scaleImage(img, w, h)) }) {
+	prepare := func() { p = orderedCGA(scaleImage(img, w, h)) }
+	if quiet {
+		prepare()
+	} else if !s.busy("Preparing image", prepare) {
 		return false, ""
 	}
 	ox := (s.W-w)/2 + 1
@@ -471,6 +481,11 @@ func (s *Session) drawBlocks(img image.Image) (bool, string) {
 		}
 		rows = append(rows, s.takeOut())
 		total += len(rows[len(rows)-1])
+	}
+	if quiet {
+		s.ResetAttr()
+		s.rawSend(append(bytes.Join(rows, nil), s.takeOut()...))
+		return true, fmt.Sprintf("ANSI %dx%d", w, (h+1)/2)
 	}
 	pr := s.newProgress("Sending image", total, true)
 	for _, r := range rows {
@@ -509,9 +524,9 @@ func (s *Session) imageView(name, format string, data []byte) {
 		var ok bool
 		var shown string
 		if useSixel {
-			ok, shown = s.drawSixel(img)
+			ok, shown = s.drawSixel(img, false)
 		} else {
-			ok, shown = s.drawBlocks(img)
+			ok, shown = s.drawBlocks(img, false)
 		}
 		if !ok {
 			s.getKey(0)
