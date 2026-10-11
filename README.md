@@ -25,7 +25,8 @@ Builds are available for Windows and Linux.
 - **Image viewer**: JPEG, JPEG XL, PNG, GIF, BMP, TIFF and WebP. Images are
   scaled to fit the screen and shown as Sixel graphics with an adaptive
   256-color palette when the caller's terminal supports Sixel, or as
-  16-color ANSI half blocks otherwise. Baud rate emulation applies, and a
+  16-color ANSI half blocks otherwise. Sixel images are always sent at full
+  speed; baud rate emulation applies only to the ANSI block display. A
   keypress interrupts a slow image cleanly. The status line shows a spinner
   while the image is decoded, then a progress bar with the amount sent and
   the time left. When the terminal reports its character cell size, Sixel
@@ -177,7 +178,7 @@ VT/xterm forms (`ESC[5~`, `ESC[6~`, `ESC[1~`, `ESC[4~`, `ESC[H`, `ESC[F`).
 Home/End to scroll; `B` to change the baud rate; `Q` or Esc to close.
 
 **Image viewer:** `M` to switch between Sixel and ANSI blocks; `B` to change
-the baud rate; `R` to redraw; `I` for image and terminal information; Enter,
+the baud rate (ANSI blocks only); `R` to redraw; `I` for image and terminal information; Enter,
 Space, `Q` or Esc to close.
 
 **After an ANSI file:** Enter, Space, `Q` or Esc to close; `R` to replay;

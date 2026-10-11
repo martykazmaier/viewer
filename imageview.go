@@ -357,11 +357,14 @@ type progress struct {
 	s           *Session
 	label       string
 	done, total int
+	paced       bool
 	start, last time.Time
 }
 
-func (s *Session) newProgress(label string, total int) *progress {
-	return &progress{s: s, label: label, total: max(total, 1), start: time.Now()}
+// newProgress starts a progress bar; paced says whether the output follows
+// the emulated baud rate, which then gives an exact time remaining.
+func (s *Session) newProgress(label string, total int, paced bool) *progress {
+	return &progress{s: s, label: label, total: max(total, 1), paced: paced, start: time.Now()}
 }
 
 func (p *progress) add(n int) { p.done = min(p.done+n, p.total) }
@@ -378,7 +381,7 @@ func (p *progress) show(force bool) {
 	kb := func(n int) string { return fmtNum(int64(n+1023)/1024) + "K" }
 	left := fmt.Sprintf(" %s %3d%% %s %s of %s", p.label, p.done*100/p.total, bar, kb(p.done), kb(p.total))
 	eta := -1
-	if p.s.Baud > 0 {
+	if p.paced && p.s.Baud > 0 {
 		eta = (p.total - p.done) * 10 / p.s.Baud
 	} else if el := time.Since(p.start); el > time.Second && p.done > 0 {
 		eta = int(el.Seconds() * float64(p.total-p.done) / float64(p.done))
@@ -413,7 +416,7 @@ func (s *Session) drawSixel(img image.Image) (bool, string) {
 			total += len(c)
 		}
 	}
-	pr := s.newProgress("Sending image", total)
+	pr := s.newProgress("Sending image", total, false)
 	col := (bw-w)/2/cw + 1
 	for k, chunks := range strips {
 		pr.show(true)
@@ -424,7 +427,7 @@ func (s *Session) drawSixel(img image.Image) (bool, string) {
 				s.rawSend([]byte("\x1b\\"))
 				return false, ""
 			}
-			s.paced(c, false)
+			s.rawSend(c)
 			pr.add(len(c))
 		}
 	}
@@ -469,7 +472,7 @@ func (s *Session) drawBlocks(img image.Image) (bool, string) {
 		rows = append(rows, s.takeOut())
 		total += len(rows[len(rows)-1])
 	}
-	pr := s.newProgress("Sending image", total)
+	pr := s.newProgress("Sending image", total, true)
 	for _, r := range rows {
 		pr.show(false)
 		ok := s.paced(r, true)
@@ -519,9 +522,12 @@ func (s *Session) imageView(name, format string, data []byte) {
 			if useSixel {
 				mode = "ANSI"
 			}
+			right := fmt.Sprintf("M=%s R=Redraw I=Info Q=Quit ", mode)
+			if !useSixel {
+				right = fmt.Sprintf("M=%s B=Baud:%s R=Redraw I=Info Q=Quit ", mode, baudLabel(s.Baud))
+			}
 			left := fmt.Sprintf(" %s  %dx%d %s  [%s]", safeText(name), b.Dx(), b.Dy(), format, shown)
-			right := fmt.Sprintf("M=%s B=Baud:%s R=Redraw I=Info Q=Quit ", mode, baudLabel(s.Baud))
-			s.Bar(s.H, left, right, 15, 1)
+			s.Bar(s.H, fit(left, max(s.W-2-len(right), 0)), right, 15, 1)
 			s.flush()
 			k := s.waitKey()
 			switch k {
@@ -529,7 +535,9 @@ func (s *Session) imageView(name, format string, data []byte) {
 				useSixel = !useSixel
 			case 'r', 'R':
 			case 'b', 'B':
-				s.Baud = nextBaud(s.Baud)
+				if !useSixel {
+					s.Baud = nextBaud(s.Baud)
+				}
 				continue
 			case 'i', 'I':
 				s.imageInfo(name, format, len(data), b, useSixel)
