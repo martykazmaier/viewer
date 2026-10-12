@@ -150,8 +150,13 @@ func sockConnected(h syscall.Handle) bool {
 	if sockValid(h) != nil {
 		return false
 	}
-	_, err := syscall.Getpeername(h)
-	return err == nil
+	// Sockets from EleBBS/RGFOSSIL (and its SSH bridge) can work fine while
+	// getpeername reports WSAENOTCONN, so only reject a socket that is
+	// actually dead.
+	if _, err := syscall.Getpeername(h); err != nil && err != syscall.Errno(10057) {
+		return false
+	}
+	return true
 }
 
 // adoptSocket copies socket handle h out of a parent process (e.g. the door
