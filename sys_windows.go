@@ -230,6 +230,12 @@ func (s *Session) initSocket(h int64) error {
 	return nil
 }
 
+func (s *Session) dropCarrier() {
+	if s.sock != 0 {
+		syscall.Shutdown(s.sock, syscall.SHUT_RDWR)
+	}
+}
+
 func (s *Session) initConsole() error {
 	hIn, err := syscall.GetStdHandle(syscall.STD_INPUT_HANDLE)
 	if err != nil {

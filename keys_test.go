@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -31,6 +32,35 @@ func TestDetectSixel(t *testing.T) {
 	s.detectGraphics()
 	if s.sixel || time.Since(start) > 2*time.Second {
 		t.Errorf("no reply: sixel = %v after %v, want ANSI after the timeout", s.sixel, time.Since(start))
+	}
+}
+
+func TestIdleDisconnect(t *testing.T) {
+	s := &Session{
+		raw:     make(chan byte),
+		conOut:  func([]byte) {},
+		Idle:    20 * time.Millisecond,
+		lastKey: time.Now().Add(-time.Second),
+	}
+	defer func() {
+		r := recover()
+		er, ok := r.(exitReason)
+		if !ok || !er.drop || !strings.Contains(er.msg, "Idle") {
+			t.Fatalf("idle: %#v", r)
+		}
+	}()
+	s.waitKeyUntil(time.Now().Add(time.Second), nil)
+	t.Fatal("waitKeyUntil returned instead of disconnecting")
+}
+
+func TestIdleResetsOnKey(t *testing.T) {
+	s := &Session{raw: make(chan byte, 1), Idle: 50 * time.Millisecond, lastKey: time.Now()}
+	s.raw <- 'x'
+	if k := s.waitKeyUntil(time.Now().Add(20*time.Millisecond), nil); k != 'x' {
+		t.Fatalf("got %#x", k)
+	}
+	if time.Since(s.lastKey) > 20*time.Millisecond {
+		t.Fatal("lastKey was not updated")
 	}
 }
 

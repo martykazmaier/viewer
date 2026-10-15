@@ -39,7 +39,8 @@ var baudRates = []int{0, 300, 1200, 2400, 9600, 14400, 19200, 28800, 38400, 5760
 // exitReason is raised with panic to unwind out of the UI on hangup or timeout.
 type exitReason struct {
 	msg    string
-	hungup bool
+	hungup bool // the caller already dropped
+	drop   bool // idle timeout: hang up the socket after the message
 }
 
 type Session struct {
@@ -75,6 +76,7 @@ type Session struct {
 	pending   []byte
 	lastCR    bool
 	hungup    bool
+	lastKey   time.Time
 	escGuard  time.Time
 	cprRow    int
 	cprCol    int
@@ -96,6 +98,7 @@ func newSession(cfg config) (*Session, error) {
 		FFmpeg:   cfg.ffmpeg,
 		Idle:     time.Duration(cfg.idle) * time.Minute,
 		lastAttr: -1,
+		lastKey:  time.Now(),
 		W:        80,
 		H:        24,
 	}
@@ -191,6 +194,21 @@ func (s *Session) fail(msg string) {
 	panic(exitReason{msg: msg})
 }
 
+func (s *Session) drop(msg string) {
+	panic(exitReason{msg: msg, drop: true})
+}
+
+// checkLimits disconnects on idle timeout and returns to the BBS when the
+// caller's time online has run out.
+func (s *Session) checkLimits() {
+	if s.Idle > 0 && time.Since(s.lastKey) > s.Idle {
+		s.drop("Idle time limit exceeded. Disconnecting.")
+	}
+	if !s.Deadline.IsZero() && time.Now().After(s.Deadline) {
+		s.fail("Your time online has expired.")
+	}
+}
+
 // run executes fn, converting hangups and timeouts into a clean shutdown.
 func (s *Session) run(fn func()) (code int) {
 	defer func() {
@@ -200,7 +218,7 @@ func (s *Session) run(fn func()) (code int) {
 				s.close()
 				panic(r)
 			}
-			if !er.hungup && er.msg != "" {
+			if er.msg != "" && !er.hungup {
 				s.safely(func() {
 					s.ResetAttr()
 					s.Print("\r\n\r\n" + er.msg + "\r\n")
@@ -208,7 +226,11 @@ func (s *Session) run(fn func()) (code int) {
 					time.Sleep(1500 * time.Millisecond)
 				})
 			}
-			if er.hungup {
+			if er.drop {
+				s.dropCarrier()
+				s.hungup = true
+			}
+			if er.hungup || er.drop {
 				code = 2
 			}
 		}
@@ -337,6 +359,14 @@ func (s *Session) keyAvailable() bool {
 // getKey returns the next key, kTimeout if none arrived in time, or kNone/kCPR for
 // input that is not a keypress.
 func (s *Session) getKey(timeout time.Duration) int {
+	k := s.pollKey(timeout)
+	if isKey(k) {
+		s.lastKey = time.Now()
+	}
+	return k
+}
+
+func (s *Session) pollKey(timeout time.Duration) int {
 	if s.keys != nil {
 		var t <-chan time.Time
 		if timeout > 0 {
@@ -509,8 +539,8 @@ func (s *Session) waitKey() int {
 // as soon as ready reports true (if given).
 func (s *Session) waitKeyUntil(until time.Time, ready func() bool) int {
 	s.flush()
-	start := time.Now()
 	for {
+		s.checkLimits()
 		wait := time.Second
 		if ready != nil {
 			wait = 250 * time.Millisecond
@@ -531,12 +561,6 @@ func (s *Session) waitKeyUntil(until time.Time, ready func() bool) int {
 		}
 		if ready != nil && ready() {
 			return 0
-		}
-		if s.Idle > 0 && time.Since(start) > s.Idle {
-			s.fail("Idle time limit exceeded. Returning to the BBS.")
-		}
-		if !s.Deadline.IsZero() && time.Now().After(s.Deadline) {
-			s.fail("Your time online has expired.")
 		}
 	}
 }

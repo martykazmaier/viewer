@@ -91,6 +91,12 @@ func (s *Session) initConsole() error {
 	return nil
 }
 
+func (s *Session) dropCarrier() {
+	if s.sock > 0 {
+		syscall.Shutdown(s.sock, syscall.SHUT_RDWR)
+	}
+}
+
 func playSoundMem([]byte)    {}
 func stopSound()             {}
 func timeBeginPeriod(uint32) {}

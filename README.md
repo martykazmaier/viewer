@@ -50,7 +50,9 @@ Builds are available for Windows and Linux.
   (CP437).
 - **Robust connection handling**: telnet control bytes are filtered, the
   caller's screen size is detected automatically, hangups are detected, and
-  the BBS's time limit and an idle timeout are enforced.
+  the BBS's time limit and an idle timeout are enforced. Idle timeout
+  disconnects the caller (the socket is shut down) instead of returning to
+  the BBS.
 
 ### Supported archives
 
@@ -166,9 +168,9 @@ The viewer can be started from another door, such as a file listing door.
 
 | Code | Meaning |
 |---|---|
-| 0 | Caller exited normally (also used for idle or time-limit exits) |
+| 0 | Caller exited normally, or the BBS time limit ran out |
 | 1 | Viewer could not start; the reason is in `viewer.log` next to the program |
-| 2 | Caller hung up |
+| 2 | Caller hung up, or idle timeout disconnected them |
 
 ## Keys
 

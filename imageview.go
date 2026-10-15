@@ -341,6 +341,7 @@ func (s *Session) busy(label string, fn func()) bool {
 			return ok
 		case <-tick.C:
 		}
+		s.checkLimits()
 		for s.keyAvailable() {
 			switch k := s.getKey(0); {
 			case k == kEsc && time.Now().Before(s.escGuard):
