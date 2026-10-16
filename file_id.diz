@@ -1,0 +1,10 @@
+DOOR32 file viewer for BBS callers
+View text and ANSI art in the terminal
+Browse archives with long filenames
+Supports baud pacing and ANSI music
+Displays images and video previews
+Uses the inherited DOOR32 socket
+Works with EleBBS and Mystic BBS software
+Includes Windows and Linux builds
+Run with a file path to view
+See README for formats and options
