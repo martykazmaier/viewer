@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -40,8 +41,14 @@ func (e *Entry) addInfo(label, value string) {
 	e.Info = append(e.Info, [2]string{label, value})
 }
 
+// isZIPName reports BBS-style ZIP names: .zip and .z?? (for example .z01, .Z03).
+func isZIPName(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	return len(ext) == 4 && ext[1] == 'z'
+}
+
 // openArchive identifies and lists an archive. It returns nil, nil for non-archives.
-func openArchive(head []byte, r io.ReaderAt, size int64) (*Archive, error) {
+func openArchive(name string, head []byte, r io.ReaderAt, size int64) (*Archive, error) {
 	switch {
 	case bytes.HasPrefix(head, []byte("Rar!\x1a\x07\x01\x00")):
 		return openRAR5(r, size)
@@ -62,6 +69,11 @@ func openArchive(head []byte, r io.ReaderAt, size int64) (*Archive, error) {
 	if arc, err := openZIP(r, size); err == nil && len(arc.Entries) > 0 {
 		arc.Format = "ZIP (embedded)"
 		return arc, nil
+	} else if isZIPName(name) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("this ZIP archive is empty or not readable")
 	}
 	return nil, nil
 }

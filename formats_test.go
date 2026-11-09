@@ -250,7 +250,7 @@ func sevenZipList(t *testing.T, data []byte, ext, wantPath string) {
 func TestARJ(t *testing.T) {
 	data := buildARJ("DOCS\\LONG FILE NAME.TXT")
 	sevenZipList(t, data, ".arj", `DOCS\LONG FILE NAME.TXT`)
-	arc, err := openArchive(data[:min(len(data), 512)], bytes.NewReader(data), int64(len(data)))
+	arc, err := openArchive("", data[:min(len(data), 512)], bytes.NewReader(data), int64(len(data)))
 	if err != nil || arc == nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestARJ(t *testing.T) {
 func TestLZH(t *testing.T) {
 	data := buildLZH2("Some Folder/Sub Folder", "A really long LHA file name.txt")
 	sevenZipList(t, data, ".lzh", `Some Folder\Sub Folder\A really long LHA file name.txt`)
-	arc, err := openArchive(data[:min(len(data), 512)], bytes.NewReader(data), int64(len(data)))
+	arc, err := openArchive("", data[:min(len(data), 512)], bytes.NewReader(data), int64(len(data)))
 	if err != nil || arc == nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestLZH(t *testing.T) {
 func TestRAR5(t *testing.T) {
 	data := buildRAR5(longUTF8)
 	sevenZipList(t, data, ".rar", strings.ReplaceAll(longUTF8, "/", `\`))
-	arc, err := openArchive(data[:min(len(data), 512)], bytes.NewReader(data), int64(len(data)))
+	arc, err := openArchive("", data[:min(len(data), 512)], bytes.NewReader(data), int64(len(data)))
 	if err != nil || arc == nil {
 		t.Fatal(err)
 	}
@@ -287,11 +287,28 @@ func TestRAR4Unicode(t *testing.T) {
 	name := strings.ReplaceAll(longUTF8, "/", `\`)
 	data := buildRAR4(name)
 	sevenZipList(t, data, ".rar", name)
-	arc, err := openArchive(data[:min(len(data), 512)], bytes.NewReader(data), int64(len(data)))
+	arc, err := openArchive("", data[:min(len(data), 512)], bytes.NewReader(data), int64(len(data)))
 	if err != nil || arc == nil {
 		t.Fatal(err)
 	}
 	checkEntry(t, arc, wantCP437())
+}
+
+func TestZIPName(t *testing.T) {
+	for _, n := range []string{"x.zip", "ARAKNET.Z03", "file.z01", `C:\files\FOO.Z12`} {
+		if !isZIPName(n) {
+			t.Errorf("%q should be treated as ZIP", n)
+		}
+	}
+	for _, n := range []string{"x.txt", "file.z", "file.gz", "file.rar", "file.zipx"} {
+		if isZIPName(n) {
+			t.Errorf("%q should not be treated as ZIP", n)
+		}
+	}
+	_, err := openArchive("NODELIST.Z05", []byte("not a zip"), bytes.NewReader([]byte("not a zip")), 9)
+	if err == nil {
+		t.Fatal("a .Z05 file that is not a ZIP should report an error, not fall through")
+	}
 }
 
 func TestZIP(t *testing.T) {
@@ -304,7 +321,7 @@ func TestZIP(t *testing.T) {
 	zw.SetComment("ZIP comment")
 	zw.Close()
 	data := buf.Bytes()
-	arc, err := openArchive(data[:512], bytes.NewReader(data), int64(len(data)))
+	arc, err := openArchive("test.zip", data[:512], bytes.NewReader(data), int64(len(data)))
 	if err != nil || arc == nil {
 		t.Fatal(err)
 	}
@@ -334,7 +351,7 @@ func TestTarGz(t *testing.T) {
 	if !ok || err != nil || innerName != "pack.tar" {
 		t.Fatalf("unwrap: %v %v %q", ok, err, innerName)
 	}
-	arc, err := openArchive(inner[:512], bytes.NewReader(inner), int64(len(inner)))
+	arc, err := openArchive("pack.tar", inner[:512], bytes.NewReader(inner), int64(len(inner)))
 	if err != nil || arc == nil {
 		t.Fatal(err)
 	}

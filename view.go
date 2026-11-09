@@ -49,7 +49,7 @@ func viewFile(s *Session, name string, r io.ReaderAt, size int64, depth int) {
 			s.videoView(name, r, size)
 			return
 		}
-		arc, err := openArchive(head, r, size)
+		arc, err := openArchive(name, head, r, size)
 		if err != nil {
 			s.message(safeText(name), err.Error())
 			return

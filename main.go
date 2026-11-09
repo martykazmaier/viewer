@@ -54,7 +54,7 @@ Usage: viewer.exe [options] <file>
 Files: text (.txt .nfo .diz ...), ANSI (.ans .asc .ice .mus .ams ...),
 images (JPEG, JPEG XL, PNG, GIF, BMP, TIFF, WebP),
 video (MP4, MKV, WebM, AVI, MOV, WMV, MPEG ... via ffmpeg),
-archives (ZIP, RAR 4/5, ARJ, LHA/LZH, TAR, plus .gz/.tgz/.bz2 wrappers).
+archives (ZIP and .z??, RAR 4/5, ARJ, LHA/LZH, TAR, plus .gz/.tgz/.bz2 wrappers).
 `
 
 var errUsage = errors.New("usage")

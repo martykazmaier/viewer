@@ -58,7 +58,7 @@ Builds are available for Windows and Linux.
 
 | Format | File list | View files inside |
 |---|---|---|
-| ZIP (incl. ZIP64) | Yes | Stored, Deflate, BZip2 |
+| ZIP (incl. ZIP64 and BBS `.z??` names such as `.z01`) | Yes | Stored, Deflate, BZip2 |
 | RAR 4 and RAR 5 | Yes | Stored entries only |
 | ARJ | Yes | Stored entries only |
 | LHA / LZH (header levels 0-2) | Yes | Stored entries only |
