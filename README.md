@@ -70,14 +70,16 @@ volumes are listed but cannot be viewed.
 
 ## Download
 
-Prebuilt binaries are in the [`releases`](releases/) folder:
+Prebuilt zip archives are in the [`releases`](releases/) folder and on the
+[GitHub Releases](https://github.com/martykazmaier/viewer/releases) page.
+Each zip contains the binary, `README.md`, `LICENSE` and `FILE_ID.DIZ`.
 
 | File | Platform |
 |---|---|
-| `viewer-win32.exe` | Windows, 32-bit (also runs on 64-bit Windows) |
-| `viewer-linux-386` | Linux, 32-bit x86 |
-| `viewer-linux-amd64` | Linux, 64-bit x86 |
-| `viewer-linux-arm64` | Linux, 64-bit ARM (e.g. Raspberry Pi 4/5) |
+| `viewer-win32.zip` | Windows, 32-bit (also runs on 64-bit Windows) |
+| `viewer-linux-386.zip` | Linux, 32-bit x86 |
+| `viewer-linux-amd64.zip` | Linux, 64-bit x86 |
+| `viewer-linux-arm64.zip` | Linux, 64-bit ARM (e.g. Raspberry Pi 4/5) |
 
 ## Usage
 

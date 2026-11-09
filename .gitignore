@@ -1,3 +1,2 @@
 *.exe
-!releases/*.exe
 viewer.log
